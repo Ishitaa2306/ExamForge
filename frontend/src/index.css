@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-ivory: #F6F2EB;
+    --color-sand: #E9DFD1;
+    --color-terracotta: #B8755D;
+    --color-sage: #788875;
+    --color-lavender: #A99AAF;
+    --color-olive: #A4A17C;
+    --color-charcoal: #302E2B;
+    --color-warmgray: #827B72;
+    --color-rose: #D6A69A;
+    --color-cream: #FCFAF6;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-cream text-charcoal;
+    font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    @apply border-sand;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-terracotta text-white font-medium rounded-lg
+           hover:bg-opacity-90 active:scale-[0.98]
+           transition-all duration-200 shadow-soft;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-ivory text-charcoal font-medium rounded-lg border border-sand
+           hover:bg-sand active:scale-[0.98]
+           transition-all duration-200;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           text-warmgray font-medium rounded-lg
+           hover:bg-ivory hover:text-charcoal active:scale-[0.98]
+           transition-all duration-200;
+  }
+
+  .card {
+    @apply bg-white rounded-xl border border-sand shadow-soft p-6;
+  }
+
+  .card-hover {
+    @apply card hover:shadow-card hover:-translate-y-0.5 transition-all duration-200 cursor-pointer;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-2.5 rounded-lg border border-sand bg-white text-charcoal
+           placeholder:text-warmgray
+           focus:outline-none focus:ring-2 focus:ring-terracotta focus:ring-opacity-30 focus:border-terracotta
+           transition-all duration-200;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-charcoal mb-1.5;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-strong  { @apply badge bg-sage/20 text-sage; }
+  .badge-weak    { @apply badge bg-terracotta/20 text-terracotta; }
+  .badge-partial { @apply badge bg-olive/20 text-olive; }
+  .badge-neutral { @apply badge bg-sand text-warmgray; }
+
+  .page-container {
+    @apply max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8;
+  }
+
+  .section-title {
+    @apply text-2xl font-display font-semibold text-charcoal;
+  }
+
+  .divider {
+    @apply border-t border-sand my-6;
+  }
+}
