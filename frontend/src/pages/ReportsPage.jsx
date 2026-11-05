@@ -100,16 +100,21 @@ export default function ReportsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    <a
-                      href={reportsApi.pdfUrl(report.examination_id)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        try {
+                          await reportsApi.downloadPdf(report.examination_id)
+                          toast.success('PDF report downloaded')
+                        } catch {
+                          toast.error('Failed to download PDF')
+                        }
+                      }}
                       className="p-1.5 rounded-md text-warmgray hover:text-terracotta hover:bg-terracotta/10 transition-colors"
                       title="Download PDF"
                     >
                       <FileDown size={15} />
-                    </a>
+                    </button>
                     <ExternalLink size={14} className="text-warmgray/40" />
                   </div>
                 </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
 import { Upload, FileText, Trash2, RefreshCw, ExternalLink } from 'lucide-react'
@@ -18,6 +18,8 @@ export default function DocumentsPage() {
   const [total, setTotal] = useState(0)
   const [uploading, setUploading] = useState(false)
   const [loading, setLoading] = useState(true)
+  const documentsRef = useRef(documents)
+  documentsRef.current = documents
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -33,12 +35,14 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     fetchDocuments()
-    // Auto-refresh if any are processing
+    // Auto-refresh periodically if any document is being processed
     const iv = setInterval(() => {
-      if (documents.some((d) => d.status === 'PROCESSING')) fetchDocuments()
-    }, 4000)
+      if (documentsRef.current.some((d) => d.status === 'PROCESSING')) {
+        fetchDocuments()
+      }
+    }, 3500)
     return () => clearInterval(iv)
-  }, [fetchDocuments, documents])
+  }, [fetchDocuments])
 
   const onDrop = useCallback(async (accepted) => {
     if (!accepted.length) return
@@ -149,6 +153,24 @@ export default function DocumentsPage() {
                 </p>
               </div>
               <span className={STATUS_BADGE[doc.status] || 'badge-neutral'}>{doc.status}</span>
+              {doc.status === 'FAILED' && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    try {
+                      await docsApi.analyze(doc.id)
+                      toast.success('Analysis restarted!')
+                      fetchDocuments()
+                    } catch (err) {
+                      toast.error('Failed to restart analysis')
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold text-terracotta bg-terracotta/10 hover:bg-terracotta/20 transition-colors flex items-center gap-1.5 shadow-2xs"
+                  title="Retry Analysis"
+                >
+                  <RefreshCw size={13} /> Retry
+                </button>
+              )}
               <button
                 onClick={(e) => deleteDocument(doc.id, e)}
                 className="p-1.5 rounded-md text-warmgray hover:text-terracotta hover:bg-terracotta/10 transition-colors"

@@ -108,7 +108,13 @@ export default function DocumentDetailPage() {
           </div>
         </div>
         {doc.status === 'ANALYZED' && (
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
+            <Link
+              to={`/documents/${id}/questions`}
+              className="btn-secondary text-sm inline-flex items-center gap-1.5"
+            >
+              <List size={15} /> Question Bank
+            </Link>
             <select
               value={maxQ}
               onChange={(e) => setMaxQ(Number(e.target.value))}

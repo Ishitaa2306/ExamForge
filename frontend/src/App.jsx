@@ -1,11 +1,13 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore.js'
 import Layout from './components/layout/Layout.jsx'
+import LandingPage from './pages/LandingPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import RegisterPage from './pages/RegisterPage.jsx'
 import DashboardPage from './pages/DashboardPage.jsx'
 import DocumentsPage from './pages/DocumentsPage.jsx'
 import DocumentDetailPage from './pages/DocumentDetailPage.jsx'
+import QuestionBankPage from './pages/QuestionBankPage.jsx'
 import ExaminationsPage from './pages/ExaminationsPage.jsx'
 import ExamSessionPage from './pages/ExamSessionPage.jsx'
 import ReportsPage from './pages/ReportsPage.jsx'
@@ -19,29 +21,39 @@ function PrivateRoute({ children }) {
 }
 
 export default function App() {
+  const token = useAuthStore((s) => s.token)
+
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
+      {/* Public Landing & Authentication */}
+      <Route path="/" element={token ? <Navigate to="/dashboard" replace /> : <LandingPage />} />
+      <Route path="/landing" element={<LandingPage />} />
+      <Route path="/login" element={token ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
+      <Route path="/register" element={token ? <Navigate to="/dashboard" replace /> : <RegisterPage />} />
+
+      {/* Authenticated Application Shell */}
       <Route
-        path="/"
         element={
           <PrivateRoute>
             <Layout />
           </PrivateRoute>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="documents" element={<DocumentsPage />} />
-        <Route path="documents/:id" element={<DocumentDetailPage />} />
-        <Route path="examinations" element={<ExaminationsPage />} />
-        <Route path="examinations/:id/session" element={<ExamSessionPage />} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="reports/:examinationId" element={<ReportDetailPage />} />
-        <Route path="knowledge" element={<KnowledgePage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/documents/:id" element={<DocumentDetailPage />} />
+        <Route path="/documents/:id/questions" element={<QuestionBankPage />} />
+        <Route path="/questions" element={<QuestionBankPage />} />
+        <Route path="/examinations" element={<ExaminationsPage />} />
+        <Route path="/examinations/:id/session" element={<ExamSessionPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/reports/:examinationId" element={<ReportDetailPage />} />
+        <Route path="/knowledge" element={<KnowledgePage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Route>
+
+      {/* Fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

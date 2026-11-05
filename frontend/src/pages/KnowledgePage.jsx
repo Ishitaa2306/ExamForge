@@ -4,35 +4,41 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 import { knowledgeApi, docsApi } from '../services/api.js'
 import toast from 'react-hot-toast'
 
-const STATUS_CONFIG = {
-  STRONG:               { label: 'Strong', color: '#788875', bg: 'bg-sage/15', icon: TrendingUp },
-  PARTIALLY_UNDERSTOOD: { label: 'Partial', color: '#A4A17C', bg: 'bg-olive/15', icon: Minus },
-  WEAK:                 { label: 'Weak', color: '#B8755D', bg: 'bg-terracotta/15', icon: TrendingDown },
-  NOT_ASSESSED:         { label: 'Not Assessed', color: '#A99AAF', bg: 'bg-lavender/15', icon: AlertCircle },
-}
-
 export default function KnowledgePage() {
   const [profiles, setProfiles] = useState([])
   const [docs, setDocs] = useState({})
+  const [topicNames, setTopicNames] = useState({})
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
     try {
       const { data } = await knowledgeApi.profiles()
       setProfiles(data)
-      // Load doc names
+      // Load document and topic metadata
       if (data.length > 0) {
         const docIds = [...new Set(data.map((p) => p.document_id))]
         const docMap = {}
+        const topicMap = {}
         await Promise.all(
           docIds.map(async (id) => {
             try {
-              const r = await docsApi.get(id)
-              docMap[id] = r.data.original_filename
-            } catch { docMap[id] = `Document ${id}` }
+              const [rDoc, rMap] = await Promise.all([
+                docsApi.get(id),
+                docsApi.knowledgeMap(id).catch(() => ({ data: { topics: [] } })),
+              ])
+              docMap[id] = rDoc.data.original_filename
+              if (rMap.data?.topics) {
+                rMap.data.topics.forEach((t) => {
+                  topicMap[t.id] = t.name
+                })
+              }
+            } catch {
+              docMap[id] = `Document ${id}`
+            }
           })
         )
         setDocs(docMap)
+        setTopicNames(topicMap)
       }
     } catch {
       toast.error('Failed to load knowledge profiles')
@@ -54,9 +60,9 @@ export default function KnowledgePage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="section-title">Knowledge Profile</h1>
-          <p className="text-warmgray text-sm mt-0.5">Your cumulative knowledge assessment across all documents</p>
+          <p className="text-warmgray text-sm mt-0.5">Your cumulative knowledge assessment synthesized by IBM Granite</p>
         </div>
-        <button onClick={load} className="btn-ghost text-sm">
+        <button onClick={load} className="btn-ghost text-sm" title="Refresh">
           <RefreshCw size={15} />
         </button>
       </div>
@@ -65,7 +71,7 @@ export default function KnowledgePage() {
         <div className="card text-center py-16">
           <Brain className="mx-auto mb-3 text-sand" size={40} />
           <p className="font-medium text-charcoal">No knowledge profiles yet</p>
-          <p className="text-warmgray text-sm mt-1">Complete an examination to build your knowledge profile.</p>
+          <p className="text-warmgray text-sm mt-1">Complete an examination to build your cumulative knowledge profile.</p>
         </div>
       ) : (
         <div className="space-y-6">
@@ -97,7 +103,7 @@ export default function KnowledgePage() {
                   </div>
                   <div className="text-right">
                     <p className="text-2xl font-display font-bold text-charcoal">{scorePct}%</p>
-                    <p className="text-xs text-warmgray">Overall</p>
+                    <p className="text-xs text-warmgray">Demonstrated Mastery</p>
                   </div>
                 </div>
 
@@ -115,10 +121,10 @@ export default function KnowledgePage() {
                   </div>
                 </div>
 
-                {/* Category breakdown */}
+                {/* Category breakdown stat cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   {categoryData.map(({ name, count, color }) => (
-                    <div key={name} className="bg-ivory rounded-lg p-3 text-center">
+                    <div key={name} className="bg-ivory rounded-lg p-3 text-center border border-sand/40">
                       <p className="text-xl font-bold font-display" style={{ color }}>{count}</p>
                       <p className="text-xs text-warmgray mt-0.5">{name}</p>
                     </div>
@@ -127,22 +133,87 @@ export default function KnowledgePage() {
 
                 {/* Mini bar chart */}
                 {categoryData.some((c) => c.count > 0) && (
-                  <ResponsiveContainer width="100%" height={80}>
-                    <BarChart data={categoryData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#827B72' }} tickLine={false} />
-                      <YAxis tick={false} axisLine={false} />
-                      <Tooltip
-                        contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #E9DFD1' }}
-                        formatter={(v, n) => [v, 'Topics']}
-                      />
-                      <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                        {categoryData.map((entry, idx) => (
-                          <Cell key={idx} fill={entry.color} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="mb-5">
+                    <ResponsiveContainer width="100%" height={90}>
+                      <BarChart data={categoryData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#827B72' }} tickLine={false} />
+                        <YAxis tick={false} axisLine={false} />
+                        <Tooltip
+                          contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #E9DFD1', backgroundColor: '#FCFAF6' }}
+                          formatter={(v) => [v, 'Topics']}
+                        />
+                        <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                          {categoryData.map((entry, idx) => (
+                            <Cell key={idx} fill={entry.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 )}
+
+                {/* Detailed Topic Categorization Lists */}
+                <div className="pt-4 border-t border-sand grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  {profile.strong_topics?.length > 0 && (
+                    <div className="bg-sage/10 rounded-lg p-3 border border-sage/20">
+                      <p className="font-semibold text-sage mb-2 flex items-center gap-1.5">
+                        <TrendingUp size={14} /> Strong Topics ({profile.strong_topics.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {profile.strong_topics.map((tid) => (
+                          <span key={tid} className="bg-white/90 px-2 py-0.5 rounded text-charcoal border border-sage/30 shadow-xs">
+                            {topicNames[tid] || (typeof tid === 'string' ? tid : `Topic #${tid}`)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {profile.partial_topics?.length > 0 && (
+                    <div className="bg-olive/10 rounded-lg p-3 border border-olive/20">
+                      <p className="font-semibold text-olive mb-2 flex items-center gap-1.5">
+                        <Minus size={14} /> Partially Understood ({profile.partial_topics.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {profile.partial_topics.map((tid) => (
+                          <span key={tid} className="bg-white/90 px-2 py-0.5 rounded text-charcoal border border-olive/30 shadow-xs">
+                            {topicNames[tid] || (typeof tid === 'string' ? tid : `Topic #${tid}`)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {profile.weak_topics?.length > 0 && (
+                    <div className="bg-terracotta/10 rounded-lg p-3 border border-terracotta/20">
+                      <p className="font-semibold text-terracotta mb-2 flex items-center gap-1.5">
+                        <TrendingDown size={14} /> Areas for Improvement ({profile.weak_topics.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {profile.weak_topics.map((tid) => (
+                          <span key={tid} className="bg-white/90 px-2 py-0.5 rounded text-charcoal border border-terracotta/30 shadow-xs">
+                            {topicNames[tid] || (typeof tid === 'string' ? tid : `Topic #${tid}`)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {profile.not_assessed_topics?.length > 0 && (
+                    <div className="bg-lavender/10 rounded-lg p-3 border border-lavender/20">
+                      <p className="font-semibold text-lavender mb-2 flex items-center gap-1.5">
+                        <AlertCircle size={14} /> Not Yet Assessed ({profile.not_assessed_topics.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {profile.not_assessed_topics.map((tid) => (
+                          <span key={tid} className="bg-white/90 px-2 py-0.5 rounded text-charcoal border border-lavender/30 shadow-xs">
+                            {topicNames[tid] || (typeof tid === 'string' ? tid : `Topic #${tid}`)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )
           })}

@@ -1,24 +1,35 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Send, CheckCircle, AlertTriangle, Clock, BookOpen, BarChart2 } from 'lucide-react'
+import {
+  Send,
+  CheckCircle,
+  AlertTriangle,
+  Clock,
+  BookOpen,
+  BarChart2,
+  Sparkles,
+  Layers,
+  ArrowRight,
+  ShieldAlert,
+} from 'lucide-react'
 import toast from 'react-hot-toast'
 import { examApi } from '../services/api.js'
 
 const DIFFICULTY_COLOR = {
-  EASY:   'bg-sage/15 text-sage',
-  MEDIUM: 'bg-olive/15 text-olive',
-  HARD:   'bg-terracotta/15 text-terracotta',
+  EASY: 'bg-sage/15 text-sage border-sage/20',
+  MEDIUM: 'bg-olive/15 text-olive border-olive/20',
+  HARD: 'bg-terracotta/15 text-terracotta border-terracotta/20',
 }
 
 const CATEGORY_COLOR = {
-  DEFINITION:  'bg-lavender/15 text-lavender',
-  CONCEPTUAL:  'bg-sage/15 text-sage',
-  DIFFERENCE:  'bg-olive/15 text-olive',
-  APPLICATION: 'bg-terracotta/15 text-terracotta',
-  NUMERICAL:   'bg-charcoal/10 text-charcoal',
-  ANALYTICAL:  'bg-lavender/15 text-lavender',
-  SCENARIO:    'bg-rose/30 text-terracotta',
-  TRICKY:      'bg-terracotta/20 text-terracotta',
+  DEFINITION: 'bg-sand text-charcoal border-sand',
+  CONCEPTUAL: 'bg-sage/20 text-sage border-sage/30',
+  DIFFERENCE: 'bg-lavender/25 text-lavender border-lavender/30',
+  APPLICATION: 'bg-olive/20 text-olive border-olive/30',
+  NUMERICAL: 'bg-terracotta/20 text-terracotta border-terracotta/30',
+  ANALYTICAL: 'bg-rose/25 text-rose border-rose/30',
+  SCENARIO: 'bg-sand/80 text-charcoal border-sand',
+  TRICKY: 'bg-terracotta/25 text-terracotta border-terracotta/35 font-semibold',
 }
 
 export default function ExamSessionPage() {
@@ -30,12 +41,30 @@ export default function ExamSessionPage() {
   const [submitting, setSubmitting] = useState(false)
   const [complete, setComplete] = useState(false)
   const [examError, setExamError] = useState(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+
   const startTimeRef = useRef(null)
+  const timerIntervalRef = useRef(null)
   const textareaRef = useRef(null)
 
   useEffect(() => {
     startOrResume()
-  }, []) // eslint-disable-line
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current)
+    }
+  }, [id]) // eslint-disable-line
+
+  // Start real-time elapsed counter for the active question
+  function resetTimer() {
+    startTimeRef.current = Date.now()
+    setElapsedSeconds(0)
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current)
+    timerIntervalRef.current = setInterval(() => {
+      if (startTimeRef.current) {
+        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000))
+      }
+    }, 1000)
+  }
 
   async function startOrResume() {
     setLoading(true)
@@ -45,14 +74,14 @@ export default function ExamSessionPage() {
         setComplete(true)
       } else {
         setQuestion(data)
-        startTimeRef.current = Date.now()
+        resetTimer()
       }
     } catch (err) {
       const detail = err.response?.data?.detail || ''
       if (detail.includes('already') || detail.includes('COMPLETED') || detail.includes('ABANDONED')) {
         setComplete(true)
       } else {
-        setExamError(detail || 'Failed to start examination')
+        setExamError(detail || 'Failed to start examination session.')
       }
     } finally {
       setLoading(false)
@@ -62,59 +91,78 @@ export default function ExamSessionPage() {
   async function submitAnswer(e) {
     e.preventDefault()
     if (!answer.trim() || submitting) return
+
     setSubmitting(true)
     const timeTaken = startTimeRef.current
       ? Math.round((Date.now() - startTimeRef.current) / 1000)
       : null
+
     try {
-      const { data } = await examApi.answer(Number(id), question.question_asked_id, answer.trim(), timeTaken)
+      const { data } = await examApi.answer(
+        Number(id),
+        question.question_asked_id,
+        answer.trim(),
+        timeTaken
+      )
       setAnswer('')
       if (data.is_last && data.question_asked_id === -1) {
-        // Examination completed by server
         setComplete(true)
-        toast.success('Examination complete! Generating your report…')
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current)
+        toast.success('Examination completed. Report synthesized!')
       } else {
         setQuestion(data)
-        startTimeRef.current = Date.now()
-        // Focus textarea for next answer
-        setTimeout(() => textareaRef.current?.focus(), 100)
+        resetTimer()
+        setTimeout(() => textareaRef.current?.focus(), 150)
       }
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to submit answer')
+      toast.error(err.response?.data?.detail || 'Failed to submit answer. Please retry.')
     } finally {
       setSubmitting(false)
     }
   }
 
   async function abandonExam() {
-    if (!confirm('Abandon this examination? You can start a new one any time.')) return
+    if (!confirm('Are you sure you want to abandon this examination? An incomplete record will be logged.')) return
     try {
       await examApi.abandon(id)
-      toast('Examination abandoned')
+      toast('Examination session abandoned.')
       navigate('/examinations')
     } catch {
       navigate('/examinations')
     }
   }
 
-  // ── Completion screen ─────────────────────────────────────────────────────
+  function formatTime(secs) {
+    const mins = Math.floor(secs / 60)
+    const rem = secs % 60
+    return `${mins}:${rem < 10 ? '0' : ''}${rem}`
+  }
+
+  // ── Completion Screen ───────────────────────────────────────────────────────
   if (complete) {
     return (
-      <div className="page-container flex flex-col items-center justify-center min-h-[70vh]">
-        <div className="card text-center max-w-md w-full animate-slide-up">
-          <div className="w-16 h-16 rounded-full bg-sage/20 flex items-center justify-center mx-auto mb-5">
-            <CheckCircle className="text-sage" size={32} />
+      <div className="page-container flex flex-col items-center justify-center min-h-[75vh]">
+        <div className="card text-center max-w-lg w-full p-10 bg-white border border-sand shadow-card rounded-2xl animate-slide-up">
+          <div className="w-16 h-16 rounded-2xl bg-sage/20 text-sage flex items-center justify-center mx-auto mb-6 shadow-soft">
+            <CheckCircle size={36} />
           </div>
-          <h2 className="text-2xl font-display font-semibold text-charcoal mb-2">Examination Complete</h2>
-          <p className="text-warmgray text-sm mb-6">
-            Your answers have been evaluated. A detailed knowledge assessment report is being generated.
+          <h2 className="text-3xl font-display font-bold text-charcoal mb-3">Examination Complete</h2>
+          <p className="text-warmgray text-sm leading-relaxed mb-8">
+            Every submitted answer was semantically evaluated by IBM Granite.
+            Google Gemini has compiled your comprehensive academic performance report.
           </p>
-          <div className="flex gap-3">
-            <button onClick={() => navigate('/examinations')} className="btn-secondary flex-1 text-sm">
-              All Examinations
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => navigate('/examinations')}
+              className="btn-secondary flex-1 text-sm py-3 justify-center"
+            >
+              Examination History
             </button>
-            <button onClick={() => navigate(`/reports/${id}`)} className="btn-primary flex-1 text-sm">
-              <BarChart2 size={15} /> View Report
+            <button
+              onClick={() => navigate(`/reports/${id}`)}
+              className="btn-primary flex-1 text-sm py-3 justify-center shadow-soft hover:shadow-card"
+            >
+              <BarChart2 size={16} /> View Performance Report
             </button>
           </div>
         </div>
@@ -122,115 +170,163 @@ export default function ExamSessionPage() {
     )
   }
 
-  // ── Error screen ──────────────────────────────────────────────────────────
+  // ── Error Screen ───────────────────────────────────────────────────────────
   if (examError) {
     return (
-      <div className="page-container flex flex-col items-center justify-center min-h-[60vh]">
-        <div className="card text-center max-w-md w-full">
-          <AlertTriangle className="mx-auto mb-3 text-terracotta" size={36} />
-          <h2 className="text-lg font-display font-semibold text-charcoal mb-2">Unable to start examination</h2>
-          <p className="text-warmgray text-sm mb-5">{examError}</p>
-          <button onClick={() => navigate('/examinations')} className="btn-secondary">Back to Examinations</button>
+      <div className="page-container flex flex-col items-center justify-center min-h-[65vh]">
+        <div className="card text-center max-w-md w-full p-8 bg-white border border-sand">
+          <ShieldAlert className="mx-auto mb-4 text-terracotta" size={40} />
+          <h2 className="text-xl font-display font-bold text-charcoal mb-2">Examination Unavailable</h2>
+          <p className="text-warmgray text-sm mb-6">{examError}</p>
+          <button onClick={() => navigate('/examinations')} className="btn-secondary w-full">
+            Back to Examinations
+          </button>
         </div>
       </div>
     )
   }
 
-  // ── Loading ───────────────────────────────────────────────────────────────
+  // ── Loading Screen ─────────────────────────────────────────────────────────
   if (loading || !question) {
     return (
-      <div className="page-container flex flex-col items-center justify-center min-h-[60vh]">
-        <div className="card text-center w-full max-w-lg py-16 animate-pulse">
-          <div className="h-4 bg-sand rounded w-1/4 mx-auto mb-3" />
-          <div className="h-6 bg-sand rounded w-3/4 mx-auto mb-2" />
-          <div className="h-6 bg-sand rounded w-2/3 mx-auto" />
-          <p className="text-warmgray text-sm mt-8">Loading question…</p>
+      <div className="page-container flex flex-col items-center justify-center min-h-[65vh]">
+        <div className="card text-center w-full max-w-xl py-16 p-8 bg-white border border-sand shadow-soft">
+          <div className="w-10 h-10 border-2 border-terracotta border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-semibold text-charcoal">Gemini Autonomous Examiner is preparing the session...</p>
+          <p className="text-xs text-warmgray mt-1">Retrieving grounded curriculum context from ChromaDB.</p>
         </div>
       </div>
     )
   }
 
   const progressPct = question.progress_pct || 0
+  const wordCount = answer.trim() ? answer.trim().split(/\s+/).length : 0
 
-  // ── Main exam screen ──────────────────────────────────────────────────────
   return (
-    <div className="page-container max-w-2xl animate-fade-in">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-terracotta flex items-center justify-center">
-              <BookOpen className="text-white" size={14} />
-            </div>
-            <span className="font-display font-semibold text-charcoal">Examination #{id}</span>
-          </div>
-          <span className="text-xs text-warmgray font-medium">{Math.round(progressPct)}% complete</span>
+    <div className="page-container max-w-3xl animate-fade-in py-8">
+      {/* Top Header Card */}
+      <div className="flex items-center justify-between gap-4 mb-4">
+        <div>
+          <span className="text-xs font-semibold text-terracotta uppercase tracking-wider">
+            Oral Academic Defense
+          </span>
+          <h1 className="text-2xl font-display font-bold text-charcoal">
+            Examination Session #{id}
+          </h1>
         </div>
-        {/* Progress bar */}
-        <div className="mt-3 bg-sand rounded-full h-1.5">
+
+        {/* Stopwatch Timer */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-ivory border border-sand text-xs font-semibold text-charcoal shadow-soft">
+          <Clock size={14} className="text-terracotta animate-pulse" />
+          <span>{formatTime(elapsedSeconds)}</span>
+        </div>
+      </div>
+
+      {/* Progress Bar & Indicators */}
+      <div className="card bg-white border border-sand p-4 mb-6 shadow-soft rounded-xl">
+        <div className="flex items-center justify-between text-xs text-warmgray mb-2">
+          <span>Question <strong>{question.order_index}</strong></span>
+          <span className="font-semibold text-charcoal">{Math.round(progressPct)}% Completed</span>
+        </div>
+        <div className="w-full bg-sand/60 rounded-full h-2 overflow-hidden">
           <div
-            className="bg-terracotta h-1.5 rounded-full transition-all duration-500"
-            style={{ width: `${progressPct}%` }}
+            className="bg-terracotta h-2 rounded-full transition-all duration-500 ease-out"
+            style={{ width: `${Math.max(5, progressPct)}%` }}
           />
         </div>
       </div>
 
-      {/* Question panel */}
-      <div className="card mb-5 animate-slide-up">
-        {/* Metadata */}
+      {/* Question Card */}
+      <div className="card bg-white border border-sand p-6 sm:p-8 mb-6 shadow-card rounded-2xl relative">
+        {/* Badges Bar */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${CATEGORY_COLOR[question.category] || 'bg-sand text-warmgray'}`}>
-            {question.category}
-          </span>
-          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DIFFICULTY_COLOR[question.difficulty] || 'bg-sand text-warmgray'}`}>
-            {question.difficulty}
-          </span>
-          {question.topic_name && (
-            <span className="inline-flex items-center gap-1 text-xs text-warmgray">
-              <BookOpen size={11} /> {question.topic_name}
+          {/* Follow-up question indicator */}
+          {question.is_follow_up ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-lavender/30 text-charcoal border border-lavender/40">
+              <Sparkles size={12} className="text-terracotta" />
+              Follow-up Probe: Probing Reasoning
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-sand/80 text-charcoal">
+              <Layers size={11} className="text-warmgray" />
+              Curriculum Question
             </span>
           )}
-          <span className="ml-auto text-xs text-warmgray">Q{question.order_index}</span>
+
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${CATEGORY_COLOR[question.category] || 'bg-sand text-charcoal'}`}>
+            {question.category}
+          </span>
+
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${DIFFICULTY_COLOR[question.difficulty] || 'bg-sand text-charcoal'}`}>
+            {question.difficulty}
+          </span>
+
+          {question.topic_name && (
+            <span className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-warmgray">
+              <BookOpen size={12} />
+              {question.topic_name}
+            </span>
+          )}
         </div>
 
-        {/* Question text */}
-        <p className="text-charcoal text-[1.05rem] leading-relaxed font-medium">
+        {/* Primary Question Formulation */}
+        <h2 className="text-xl sm:text-2xl font-serif text-charcoal leading-snug font-medium pt-1">
           {question.question_text}
-        </p>
+        </h2>
+
+        {question.is_follow_up && (
+          <p className="text-xs text-warmgray mt-3 italic border-t border-sand/70 pt-2.5">
+            The examiner has posed this question based on gaps detected in your previous response.
+          </p>
+        )}
       </div>
 
-      {/* Answer form */}
+      {/* Answer Submission Form */}
       <form onSubmit={submitAnswer} className="space-y-4">
-        <div>
-          <label className="label">Your Answer</label>
+        <div className="card bg-white border border-sand p-6 shadow-card rounded-2xl">
+          <div className="flex items-center justify-between mb-2">
+            <label className="label text-sm font-semibold text-charcoal">Your Academic Explanation</label>
+            <span className="text-xs text-warmgray">{wordCount} words</span>
+          </div>
+
           <textarea
             ref={textareaRef}
-            rows={7}
+            rows={8}
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder="Write a thorough answer demonstrating your understanding…"
-            className="input-field resize-none leading-relaxed"
+            placeholder="Formulate your response thoroughly. Explain fundamental mechanisms, reasoning, and context. IBM Granite will semantically evaluate your depth of understanding..."
+            className="input-field resize-none leading-relaxed text-base font-normal p-4"
             disabled={submitting}
             autoFocus
           />
-          <p className="text-xs text-warmgray mt-1 text-right">{answer.trim().split(/\s+/).filter(Boolean).length} words</p>
-        </div>
-        <div className="flex justify-between items-center gap-3">
-          <button
-            type="button"
-            onClick={abandonExam}
-            className="btn-ghost text-sm"
-          >
-            Abandon
-          </button>
-          <button
-            type="submit"
-            disabled={submitting || !answer.trim()}
-            className="btn-primary"
-          >
-            <Send size={15} />
-            {submitting ? 'Submitting…' : question.is_last ? 'Submit Final Answer' : 'Submit Answer'}
-          </button>
+
+          <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+            <button
+              type="button"
+              onClick={abandonExam}
+              className="btn-ghost text-xs text-warmgray hover:text-terracotta"
+            >
+              Abandon Session
+            </button>
+
+            <button
+              type="submit"
+              disabled={submitting || !answer.trim()}
+              className="btn-primary px-7 py-3 rounded-xl font-semibold shadow-soft hover:shadow-card disabled:opacity-50 transition-all w-full sm:w-auto"
+            >
+              {submitting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>IBM Granite Evaluating...</span>
+                </>
+              ) : (
+                <>
+                  <Send size={15} />
+                  <span>{question.is_last ? 'Submit Final Answer' : 'Submit Answer & Continue'}</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </form>
     </div>

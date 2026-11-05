@@ -1,16 +1,35 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, FileDown, TrendingUp, TrendingDown, Minus, AlertCircle, CheckCircle, BarChart2 } from 'lucide-react'
-import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts'
+import {
+  ArrowLeft,
+  FileDown,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  AlertCircle,
+  CheckCircle,
+  BarChart2,
+  Sparkles,
+  BookOpen,
+} from 'lucide-react'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+  ResponsiveContainer,
+} from 'recharts'
 import { reportsApi } from '../services/api.js'
 import toast from 'react-hot-toast'
 
 const SCORE_CONFIG = (pct) => {
-  if (pct >= 85) return { label: 'Excellent', color: '#788875', bg: 'bg-sage/15' }
-  if (pct >= 70) return { label: 'Good', color: '#788875', bg: 'bg-sage/15' }
+  if (pct >= 85) return { label: 'Distinction', color: '#788875', bg: 'bg-sage/15' }
+  if (pct >= 70) return { label: 'Commended', color: '#788875', bg: 'bg-sage/15' }
   if (pct >= 55) return { label: 'Satisfactory', color: '#A4A17C', bg: 'bg-olive/15' }
-  if (pct >= 40) return { label: 'Needs Work', color: '#B8755D', bg: 'bg-terracotta/15' }
-  return { label: 'Poor', color: '#B8755D', bg: 'bg-terracotta/15' }
+  if (pct >= 40) return { label: 'Needs Review', color: '#B8755D', bg: 'bg-terracotta/15' }
+  return { label: 'Unsatisfactory', color: '#B8755D', bg: 'bg-terracotta/15' }
 }
 
 export default function ReportDetailPage() {
@@ -20,6 +39,7 @@ export default function ReportDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [retrying, setRetrying] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
 
   useEffect(() => {
     loadReport()
@@ -45,30 +65,50 @@ export default function ReportDetailPage() {
     setRetrying(false)
   }
 
-  if (loading) return (
-    <div className="page-container">
-      <div className="card animate-pulse py-16 text-center text-warmgray">Loading report…</div>
-    </div>
-  )
+  async function handleDownloadPdf() {
+    setDownloadingPdf(true)
+    try {
+      await reportsApi.downloadPdf(examinationId, `examforge-report-${examinationId}.pdf`)
+      toast.success('Report PDF downloaded successfully.')
+    } catch (err) {
+      toast.error('Failed to download report PDF.')
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }
 
-  if (error) return (
-    <div className="page-container">
-      <Link to="/reports" className="btn-ghost mb-6 -ml-2 text-sm">
-        <ArrowLeft size={15} /> Back to reports
-      </Link>
-      <div className="card text-center py-12">
-        <AlertCircle className="mx-auto mb-3 text-terracotta" size={36} />
-        <h2 className="font-display font-semibold text-charcoal mb-2">Report not available</h2>
-        <p className="text-warmgray text-sm mb-5">{error}</p>
-        <div className="flex gap-3 justify-center">
-          <button onClick={retryReport} disabled={retrying} className="btn-primary">
-            {retrying ? 'Checking…' : 'Retry'}
-          </button>
-          <Link to={`/examinations/${examinationId}/session`} className="btn-secondary">Resume Exam</Link>
+  if (loading) {
+    return (
+      <div className="page-container py-16 text-center">
+        <div className="w-10 h-10 border-2 border-terracotta border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-sm font-semibold text-charcoal">Gemini Report Generation Agent is compiling evidence...</p>
+        <p className="text-xs text-warmgray mt-1">Aggregating IBM Granite semantic answer evaluations.</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="page-container max-w-2xl py-12">
+        <Link to="/reports" className="btn-ghost mb-6 -ml-2 text-sm inline-flex items-center gap-1.5">
+          <ArrowLeft size={15} /> All Reports
+        </Link>
+        <div className="card text-center py-12 bg-white border border-sand shadow-soft rounded-2xl">
+          <AlertCircle className="mx-auto mb-3 text-terracotta" size={40} />
+          <h2 className="font-display text-xl font-bold text-charcoal mb-2">Report Not Ready</h2>
+          <p className="text-warmgray text-sm mb-6 max-w-md mx-auto">{error}</p>
+          <div className="flex gap-3 justify-center">
+            <button onClick={retryReport} disabled={retrying} className="btn-primary text-sm">
+              {retrying ? 'Refreshing...' : 'Retry Report Generation'}
+            </button>
+            <Link to={`/examinations/${examinationId}/session`} className="btn-secondary text-sm">
+              Resume Examination
+            </Link>
+          </div>
         </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   if (!report) return null
 
@@ -78,9 +118,9 @@ export default function ReportDetailPage() {
   // Topic bar chart data
   const topicData = report.topic_scores
     ? Object.entries(report.topic_scores).map(([tid, info]) => ({
-        name: (typeof info === 'object' ? info.name : `T${tid}`)?.slice(0, 25) || `T${tid}`,
-        score: typeof info === 'object' ? Math.round(info.score * 100) : Math.round(info * 100),
-        status: typeof info === 'object' ? info.status : '—',
+        name: (typeof info === 'object' ? info.name : `Topic ${tid}`)?.slice(0, 30) || `Topic ${tid}`,
+        score: typeof info === 'object' ? Math.round((info.score || 0) * 100) : Math.round(Number(info) * 100),
+        status: typeof info === 'object' ? info.status : 'ASSESSED',
       }))
     : []
 
@@ -92,78 +132,101 @@ export default function ReportDetailPage() {
   }
 
   return (
-    <div className="page-container max-w-4xl animate-fade-in">
+    <div className="page-container max-w-4xl animate-fade-in py-8">
+      {/* Navigation & Action Bar */}
       <div className="flex items-center justify-between mb-6">
-        <Link to="/reports" className="btn-ghost text-sm -ml-2">
+        <Link to="/reports" className="btn-ghost text-sm -ml-2 inline-flex items-center gap-1.5">
           <ArrowLeft size={15} /> All Reports
         </Link>
-        <a
-          href={reportsApi.pdfUrl(examinationId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-secondary text-sm"
+        <button
+          onClick={handleDownloadPdf}
+          disabled={downloadingPdf}
+          className="btn-secondary text-sm inline-flex items-center gap-2 shadow-soft hover:shadow-card"
         >
-          <FileDown size={15} /> Download PDF
-        </a>
+          <FileDown size={16} />
+          {downloadingPdf ? 'Exporting PDF...' : 'Download Certified PDF'}
+        </button>
       </div>
 
-      {/* Header */}
-      <div className="card mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-5">
-          <div className={`w-20 h-20 rounded-2xl ${cfg.bg} flex flex-col items-center justify-center flex-shrink-0`}>
-            <span className="text-3xl font-display font-bold" style={{ color: cfg.color }}>{scorePct}%</span>
-            <span className="text-xs font-medium" style={{ color: cfg.color }}>{cfg.label}</span>
+      {/* Header Banner */}
+      <div className="card bg-white border border-sand p-6 sm:p-8 mb-6 shadow-soft rounded-2xl">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-6">
+          <div className={`w-24 h-24 rounded-2xl ${cfg.bg} flex flex-col items-center justify-center flex-shrink-0 border border-sand/60 shadow-soft`}>
+            <span className="text-3xl font-display font-bold" style={{ color: cfg.color }}>
+              {scorePct}%
+            </span>
+            <span className="text-xs font-bold uppercase tracking-wider mt-0.5" style={{ color: cfg.color }}>
+              {cfg.label}
+            </span>
           </div>
-          <div>
-            <h1 className="section-title">Examination #{report.examination_id} Report</h1>
-            <p className="text-sm text-warmgray mt-1">
-              Generated {new Date(report.generated_at).toLocaleDateString()} ·
-              Mode: <span className="font-medium text-charcoal">{(report.provider_mode || 'mock').toUpperCase()}</span>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 text-xs font-semibold text-terracotta uppercase tracking-wider mb-1">
+              <Sparkles size={14} />
+              Google Gemini Synthesized Performance Report
+            </div>
+            <h1 className="text-3xl font-display font-bold text-charcoal tracking-tight">
+              Examination #{report.examination_id} Academic Review
+            </h1>
+            <p className="text-xs text-warmgray mt-2">
+              Generated: {new Date(report.generated_at).toLocaleDateString(undefined, { dateStyle: 'long' })} ·
+              Inference Mode: <strong className="text-charcoal uppercase">Live Dual AI (Gemini + Granite)</strong>
             </p>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+      {/* Grid: Topic Chart & Knowledge Summary */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* Topic performance chart */}
         {topicData.length > 0 && (
-          <div className="card">
-            <h2 className="text-sm font-semibold text-charcoal mb-4">Topic Performance</h2>
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={topicData} layout="vertical" margin={{ left: 0, right: 16 }}>
-                <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: '#827B72' }} tickLine={false} />
-                <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 10, fill: '#827B72' }} tickLine={false} />
-                <Tooltip
-                  contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #E9DFD1' }}
-                  formatter={(v) => [`${v}%`, 'Score']}
-                />
-                <Bar dataKey="score" radius={[0, 4, 4, 0]}>
-                  {topicData.map((entry, idx) => (
-                    <Cell key={idx} fill={topicBarColor(entry.status)} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="card bg-white border border-sand p-6 shadow-soft rounded-2xl">
+            <h2 className="text-base font-display font-bold text-charcoal mb-4">Topic-by-Topic Performance</h2>
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topicData} layout="vertical" margin={{ left: 0, right: 16 }}>
+                  <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11, fill: '#827B72' }} tickLine={false} />
+                  <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11, fill: '#302E2B' }} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #E9DFD1', backgroundColor: '#FCFAF6' }}
+                    formatter={(v) => [`${v}%`, 'Strength']}
+                  />
+                  <Bar dataKey="score" radius={[0, 6, 6, 0]}>
+                    {topicData.map((entry, idx) => (
+                      <Cell key={idx} fill={topicBarColor(entry.status)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         )}
 
-        {/* Summary */}
-        <div className="card">
-          <h2 className="text-sm font-semibold text-charcoal mb-4">Knowledge Summary</h2>
-          <div className="space-y-2.5">
+        {/* Knowledge Summary */}
+        <div className="card bg-white border border-sand p-6 shadow-soft rounded-2xl">
+          <h2 className="text-base font-display font-bold text-charcoal mb-4">Demonstrated Understanding</h2>
+          <div className="space-y-3.5">
             {[
-              { icon: CheckCircle, label: 'Strong Concepts', items: report.strong_concepts, color: 'text-sage' },
-              { icon: TrendingUp, label: 'Partially Understood', items: report.partial_concepts, color: 'text-olive' },
-              { icon: TrendingDown, label: 'Needs Improvement', items: report.weak_concepts, color: 'text-terracotta' },
-              { icon: Minus, label: 'Not Assessed', items: report.not_assessed_concepts, color: 'text-warmgray' },
-            ].map(({ icon: Icon, label, items, color }) => (
-              <div key={label} className="flex items-start gap-2.5">
-                <Icon size={15} className={`${color} mt-0.5 flex-shrink-0`} />
-                <div>
-                  <p className="text-xs font-medium text-charcoal">{label}</p>
-                  <p className="text-xs text-warmgray mt-0.5">
-                    {!items || items.length === 0 ? 'None' : items.join(', ')}
-                  </p>
+              { icon: CheckCircle, label: 'Strong Mastery Concepts', items: report.strong_concepts, color: 'text-sage', badge: 'bg-sage/15 text-sage' },
+              { icon: TrendingUp, label: 'Partially Understood Areas', items: report.partial_concepts, color: 'text-olive', badge: 'bg-olive/15 text-olive' },
+              { icon: TrendingDown, label: 'Critical Knowledge Gaps', items: report.weak_concepts, color: 'text-terracotta', badge: 'bg-terracotta/15 text-terracotta' },
+              { icon: Minus, label: 'Not Assessed (Unprobed)', items: report.not_assessed_concepts, color: 'text-warmgray', badge: 'bg-sand text-warmgray' },
+            ].map(({ icon: Icon, label, items, color, badge }) => (
+              <div key={label} className="border-b border-sand/60 pb-3 last:border-0 last:pb-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon size={14} className={color} />
+                  <span className="text-xs font-semibold text-charcoal">{label}</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pl-5">
+                  {!items || items.length === 0 ? (
+                    <span className="text-xs text-warmgray italic">None recorded</span>
+                  ) : (
+                    items.map((item, i) => (
+                      <span key={i} className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${badge}`}>
+                        {typeof item === 'object' ? JSON.stringify(item) : item}
+                      </span>
+                    ))
+                  )}
                 </div>
               </div>
             ))}
@@ -171,39 +234,47 @@ export default function ReportDetailPage() {
         </div>
       </div>
 
-      {/* Recommendations */}
-      {report.recommendations?.length > 0 && (
-        <div className="card mb-5">
-          <h2 className="text-sm font-semibold text-charcoal mb-4">Revision Priorities</h2>
-          <ol className="space-y-2">
-            {report.recommendations.map((rec, i) => (
-              <li key={i} className="flex items-start gap-3 text-sm text-warmgray">
-                <span className="w-5 h-5 rounded-full bg-terracotta/15 text-terracotta text-xs font-semibold flex items-center justify-center flex-shrink-0 mt-0.5">{i + 1}</span>
-                {rec}
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-
-      {/* Topic table */}
-      {topicData.length > 0 && (
-        <div className="card">
-          <h2 className="text-sm font-semibold text-charcoal mb-4">Detailed Topic Scores</h2>
-          <div className="space-y-2">
-            {topicData.map((t) => (
-              <div key={t.name} className="flex items-center gap-3">
-                <p className="text-sm text-charcoal w-40 flex-shrink-0 truncate">{t.name}</p>
-                <div className="flex-1 bg-sand rounded-full h-2">
-                  <div
-                    className="h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${t.score}%`, backgroundColor: topicBarColor(t.status) }}
-                  />
+      {/* Revision Priorities & Recommendations */}
+      {report.recommendations && report.recommendations.length > 0 && (
+        <div className="card bg-white border border-sand p-6 sm:p-8 mb-6 shadow-soft rounded-2xl">
+          <h2 className="text-lg font-display font-bold text-charcoal mb-4 flex items-center gap-2">
+            <BookOpen className="w-5 h-5 text-terracotta" />
+            Prioritized Revision Plan
+          </h2>
+          <div className="space-y-3">
+            {report.recommendations.map((rec, i) => {
+              const isObj = typeof rec === 'object' && rec !== null
+              return (
+                <div
+                  key={i}
+                  className="flex items-start gap-3.5 p-3.5 rounded-xl bg-ivory/60 border border-sand/60 text-xs"
+                >
+                  <span className="w-6 h-6 rounded-full bg-terracotta text-white font-bold flex items-center justify-center flex-shrink-0 mt-0.5 text-xs shadow-soft">
+                    {i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    {isObj ? (
+                      <>
+                        <div className="flex items-center gap-2 mb-1">
+                          <strong className="text-charcoal font-semibold">{rec.topic || 'Recommended Focus'}</strong>
+                          {rec.priority && (
+                            <span className="badge bg-terracotta/20 text-terracotta text-[10px]">
+                              {rec.priority}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-charcoal/90 mb-1">{rec.focus_area}</p>
+                        {rec.concrete_action && (
+                          <p className="text-warmgray italic">{rec.concrete_action}</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-charcoal text-sm leading-relaxed">{rec}</p>
+                    )}
+                  </div>
                 </div>
-                <span className="text-xs text-warmgray w-10 text-right">{t.score}%</span>
-                <span className="text-xs w-24 text-warmgray truncate">{t.status}</span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}

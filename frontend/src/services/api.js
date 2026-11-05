@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore.js'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 60000,
 })
 
 // Attach Bearer token to every request
@@ -17,7 +17,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 && !err.config?.url?.includes('/auth/login')) {
       useAuthStore.getState().logout()
       window.location.href = '/login'
     }
@@ -44,7 +44,7 @@ export const authApi = {
 
 // ── Documents ─────────────────────────────────────────────────────────────────
 export const docsApi = {
-  list: (skip = 0, limit = 20) => api.get('/documents/', { params: { skip, limit } }),
+  list: (skip = 0, limit = 50) => api.get('/documents/', { params: { skip, limit } }),
   get: (id) => api.get(`/documents/${id}`),
   status: (id) => api.get(`/documents/${id}/status`),
   upload: (file) => {
@@ -60,9 +60,15 @@ export const docsApi = {
   delete: (id) => api.delete(`/documents/${id}`),
 }
 
+// ── Questions ─────────────────────────────────────────────────────────────────
+export const questionsApi = {
+  bank: (documentId, params = {}) => api.get(`/questions/bank/${documentId}`, { params }),
+  evaluation: (answerId) => api.get(`/questions/evaluation/${answerId}`),
+}
+
 // ── Examinations ──────────────────────────────────────────────────────────────
 export const examApi = {
-  list: (skip = 0, limit = 20) => api.get('/examinations/', { params: { skip, limit } }),
+  list: (skip = 0, limit = 50) => api.get('/examinations/', { params: { skip, limit } }),
   get: (id) => api.get(`/examinations/${id}`),
   create: (documentId, maxQuestions = 20) =>
     api.post('/examinations/', { document_id: documentId, max_questions: maxQuestions }),
@@ -80,15 +86,34 @@ export const examApi = {
 
 // ── Reports ───────────────────────────────────────────────────────────────────
 export const reportsApi = {
-  list: (skip = 0, limit = 20) => api.get('/reports/', { params: { skip, limit } }),
+  list: (skip = 0, limit = 50) => api.get('/reports/', { params: { skip, limit } }),
   get: (examinationId) => api.get(`/reports/examination/${examinationId}`),
   pdfUrl: (examinationId) => `/api/reports/examination/${examinationId}/pdf`,
+  downloadPdf: async (examinationId, filename = `examforge-report-${examinationId}.pdf`) => {
+    const response = await api.get(`/reports/examination/${examinationId}/pdf`, {
+      responseType: 'blob',
+    })
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
 }
 
 // ── Knowledge ─────────────────────────────────────────────────────────────────
 export const knowledgeApi = {
   profile: (documentId) => api.get(`/knowledge/profile/${documentId}`),
   profiles: () => api.get('/knowledge/profiles'),
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+export const settingsApi = {
+  status: () => api.get('/settings/status'),
+  testProviders: () => api.post('/settings/test-providers'),
 }
 
 export default api
