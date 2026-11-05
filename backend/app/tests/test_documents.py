@@ -81,6 +81,4 @@ def test_documents_require_auth():
     assert response.status_code in (401, 403)
 
 
-def _placeholder():
-    pass
-    assert response.status_code == 403
+

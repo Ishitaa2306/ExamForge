@@ -8,13 +8,8 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.database.models import (
-    AnswerEvaluation,
-    DocumentTopic,
     Examination,
     ExaminationReport,
-    KnowledgeProfile,
-    TopicAssessment,
-    TopicAssessmentStatus,
     User,
 )
 
@@ -24,8 +19,7 @@ logger = logging.getLogger(__name__)
 class ReportService:
     @staticmethod
     def generate_report(db: Session, examination: Examination) -> ExaminationReport:
-        """Aggregate evaluation data into an ExaminationReport."""
-        # Check if report already exists
+        """Aggregate evaluation data and invoke Gemini Report Generation Agent."""
         existing = (
             db.query(ExaminationReport)
             .filter(ExaminationReport.examination_id == examination.id)
@@ -34,174 +28,8 @@ class ReportService:
         if existing:
             return existing
 
-        evaluations = (
-            db.query(AnswerEvaluation)
-            .filter(AnswerEvaluation.examination_id == examination.id)
-            .all()
-        )
-
-        if evaluations:
-            # Weighted score: correctness 30%, completeness 25%, conceptual 20%, reasoning 15%, application 10%
-            def weighted_score(ev: AnswerEvaluation) -> float:
-                c = ev.correctness_score or 0.0
-                comp = ev.completeness_score or 0.0
-                con = ev.conceptual_score or 0.0
-                r = ev.reasoning_score or 0.0
-                a = ev.application_score or 0.0
-                return c * 0.30 + comp * 0.25 + con * 0.20 + r * 0.15 + a * 0.10
-
-            overall_score = sum(weighted_score(e) for e in evaluations) / len(evaluations)
-        else:
-            overall_score = 0.0
-
-        assessments = (
-            db.query(TopicAssessment)
-            .filter(TopicAssessment.examination_id == examination.id)
-            .all()
-        )
-
-        # Get topic names
-        all_topics = db.query(DocumentTopic).filter(
-            DocumentTopic.document_id == examination.document_id
-        ).all()
-        topic_name_map = {t.id: t.name for t in all_topics}
-
-        topic_scores: dict = {}
-        strong_concepts: list[str] = []
-        weak_concepts_list: list[str] = []
-        partial_concepts: list[str] = []
-        not_assessed_concepts: list[str] = []
-
-        for ta in assessments:
-            topic_name = topic_name_map.get(ta.topic_id, f"Topic {ta.topic_id}")
-            topic_scores[str(ta.topic_id)] = {
-                "name": topic_name,
-                "score": round(ta.strength_score or 0.0, 3),
-                "status": ta.status.value,
-                "questions_examined": ta.questions_examined,
-            }
-            if ta.status == TopicAssessmentStatus.STRONG:
-                strong_concepts.append(topic_name)
-            elif ta.status == TopicAssessmentStatus.WEAK:
-                weak_concepts_list.append(topic_name)
-            elif ta.status == TopicAssessmentStatus.PARTIALLY_UNDERSTOOD:
-                partial_concepts.append(topic_name)
-            else:
-                not_assessed_concepts.append(topic_name)
-
-        # Collect missing concepts and mistakes from evaluations
-        missing_concepts: list[str] = []
-        mistakes: list[str] = []
-        for ev in evaluations:
-            if ev.missing_concepts:
-                missing_concepts.extend(ev.missing_concepts)
-            if ev.mistakes_identified:
-                mistakes.extend(ev.mistakes_identified)
-
-        # Deduplicate
-        missing_concepts = list(dict.fromkeys(missing_concepts))[:10]
-        mistakes = list(dict.fromkeys(mistakes))[:10]
-
-        # Build recommendations
-        recommendations = ReportService._build_recommendations(
-            overall_score=overall_score,
-            weak_topics=[topic_name_map.get(ta.topic_id, "") for ta in assessments if ta.status == TopicAssessmentStatus.WEAK],
-            partial_topics=[topic_name_map.get(ta.topic_id, "") for ta in assessments if ta.status == TopicAssessmentStatus.PARTIALLY_UNDERSTOOD],
-            not_assessed=[topic_name_map.get(ta.topic_id, "") for ta in assessments if ta.status == TopicAssessmentStatus.NOT_ASSESSED],
-        )
-
-        provider_mode = evaluations[0].provider_mode if evaluations else "mock"
-
-        report = ExaminationReport(
-            examination_id=examination.id,
-            user_id=examination.user_id,
-            document_id=examination.document_id,
-            overall_score=round(overall_score, 4),
-            topic_scores=topic_scores,
-            strong_concepts=strong_concepts,
-            weak_concepts=weak_concepts_list,
-            partial_concepts=partial_concepts,
-            not_assessed_concepts=not_assessed_concepts,
-            recommendations=recommendations,
-            provider_mode=provider_mode,
-            generated_at=datetime.now(timezone.utc),
-        )
-        db.add(report)
-
-        # Update KnowledgeProfile
-        ReportService._update_knowledge_profile(
-            db=db,
-            examination=examination,
-            assessments=assessments,
-            overall_score=overall_score,
-        )
-
-        db.commit()
-        db.refresh(report)
-        logger.info("Generated report for examination %d", examination.id)
-        return report
-
-    @staticmethod
-    def _update_knowledge_profile(
-        db: Session,
-        examination: Examination,
-        assessments: list[TopicAssessment],
-        overall_score: float,
-    ) -> None:
-        """Create or update the user's KnowledgeProfile for this document."""
-        profile = (
-            db.query(KnowledgeProfile)
-            .filter(
-                KnowledgeProfile.user_id == examination.user_id,
-                KnowledgeProfile.document_id == examination.document_id,
-            )
-            .first()
-        )
-        if not profile:
-            profile = KnowledgeProfile(
-                user_id=examination.user_id,
-                document_id=examination.document_id,
-            )
-            db.add(profile)
-
-        strong = [ta.topic_id for ta in assessments if ta.status == TopicAssessmentStatus.STRONG]
-        weak = [ta.topic_id for ta in assessments if ta.status == TopicAssessmentStatus.WEAK]
-        partial = [ta.topic_id for ta in assessments if ta.status == TopicAssessmentStatus.PARTIALLY_UNDERSTOOD]
-        not_assessed = [ta.topic_id for ta in assessments if ta.status == TopicAssessmentStatus.NOT_ASSESSED]
-
-        profile.strong_topics = strong
-        profile.weak_topics = weak
-        profile.partial_topics = partial
-        profile.not_assessed_topics = not_assessed
-        profile.overall_score = round(overall_score, 4)
-        profile.total_examinations = (profile.total_examinations or 0) + 1
-        profile.last_examination_id = examination.id
-        profile.updated_at = datetime.now(timezone.utc)
-
-    @staticmethod
-    def _build_recommendations(
-        overall_score: float,
-        weak_topics: list[str],
-        partial_topics: list[str],
-        not_assessed: list[str],
-    ) -> list[str]:
-        recs: list[str] = []
-        if overall_score >= 0.85:
-            recs.append("Outstanding performance. Consider attempting more advanced examination challenges.")
-        elif overall_score >= 0.70:
-            recs.append("Good overall performance. Focus on deepening understanding of partially-understood topics.")
-        elif overall_score >= 0.55:
-            recs.append("Satisfactory performance. Revisit the topics marked as WEAK before the next examination.")
-        else:
-            recs.append("Performance indicates significant gaps. A thorough review of all topics is recommended.")
-
-        if weak_topics:
-            recs.append(f"Prioritise revision of: {', '.join(weak_topics[:3])}.")
-        if partial_topics:
-            recs.append(f"Consolidate understanding of: {', '.join(partial_topics[:3])}.")
-        if not_assessed:
-            recs.append(f"The following topics were not sufficiently examined: {', '.join(not_assessed[:3])}. Include these in the next session.")
-        return recs
+        from app.agents.report_generation import ReportGenerationAgent
+        return ReportGenerationAgent.generate(db=db, examination=examination)
 
     @staticmethod
     def generate_pdf(
@@ -210,20 +38,18 @@ class ReportService:
         examination: Examination,
         user: User,
     ) -> bytes:
-        """Generate a PDF report using ReportLab."""
+        """Generate a PDF report using ReportLab with the ExamForge editorial aesthetic."""
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.colors import HexColor, black, white
-            from reportlab.lib.units import mm, cm
+            from reportlab.lib.colors import HexColor
+            from reportlab.lib.units import cm
             from reportlab.platypus import (
                 SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-                HRFlowable, KeepTogether,
+                HRFlowable,
             )
-            from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-            import io as _io
 
-            buffer = _io.BytesIO()
+            buffer = __import__("io").BytesIO()
             doc = SimpleDocTemplate(
                 buffer,
                 pagesize=A4,
@@ -233,24 +59,25 @@ class ReportService:
                 bottomMargin=2*cm,
             )
 
-            # Colours matching ExamForge palette
+            # ExamForge Editorial Colors
             TERRACOTTA = HexColor("#B8755D")
             CHARCOAL = HexColor("#302E2B")
             WARMGRAY = HexColor("#827B72")
+            SAND = HexColor("#E9DFD1")
+            IVORY = HexColor("#F6F2EB")
             SAGE = HexColor("#788875")
             LAVENDER = HexColor("#A99AAF")
-            IVORY = HexColor("#F6F2EB")
-            SAND = HexColor("#E9DFD1")
 
             styles = getSampleStyleSheet()
+
             title_style = ParagraphStyle(
-                "Title", parent=styles["Title"],
+                "Title", parent=styles["Heading1"],
                 textColor=CHARCOAL, fontSize=22, spaceAfter=4,
                 fontName="Helvetica-Bold",
             )
             subtitle_style = ParagraphStyle(
                 "Subtitle", parent=styles["Normal"],
-                textColor=WARMGRAY, fontSize=11, spaceAfter=16,
+                textColor=WARMGRAY, fontSize=10, spaceAfter=14,
             )
             heading_style = ParagraphStyle(
                 "Heading", parent=styles["Heading2"],
@@ -293,7 +120,7 @@ class ReportService:
                     )),
                     Paragraph(
                         f"<b>{_score_label(report.overall_score or 0)}</b><br/>"
-                        f"<font color='#827B72' size='9'>Mode: {(report.provider_mode or 'mock').upper()}</font>",
+                        f"<font color='#827B72' size='9'>AI Provider: {(report.provider_mode or 'live').upper()} (IBM Granite + Google Gemini)</font>",
                         body_style,
                     ),
                 ]],
@@ -322,24 +149,23 @@ class ReportService:
                             str(tinfo.get("questions_examined", 0)),
                         ])
                     else:
-                        topic_data.append([f"Topic {_tid}", f"{round(float(tinfo)*100,1)}%", "—", "—"])
+                        topic_data.append([str(_tid), f"{round(float(tinfo)*100,1)}%", "—", "—"])
 
-                topic_table = Table(topic_data, colWidths=[8*cm, 2.5*cm, 4.5*cm, 2.5*cm])
+                topic_table = Table(topic_data, colWidths=[8*cm, 3*cm, 3.5*cm, 2.5*cm])
                 topic_table.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), SAND),
+                    ("BACKGROUND", (0, 0), (-1, 0), IVORY),
                     ("TEXTCOLOR", (0, 0), (-1, 0), CHARCOAL),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("FONTSIZE", (0, 0), (-1, -1), 9),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [white, IVORY]),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
                     ("GRID", (0, 0), (-1, -1), 0.5, SAND),
-                    ("PADDING", (0, 0), (-1, -1), 6),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ]))
                 story.append(topic_table)
-                story.append(Spacer(1, 12))
+                story.append(Spacer(1, 10))
 
-            # Strong / Weak / Partial
-            def _concept_section(title: str, items: list[str], color) -> None:
+            # Concept Breakdown
+            def _concept_section(title: str, items: list, color):
                 if not items:
                     return
                 story.append(Paragraph(title, heading_style))
@@ -352,17 +178,24 @@ class ReportService:
             _concept_section("Areas for Improvement", report.weak_concepts or [], TERRACOTTA)
             _concept_section("Not Assessed", report.not_assessed_concepts or [], WARMGRAY)
 
-            # Recommendations
+            # Recommendations / Revision Priorities
             if report.recommendations:
                 story.append(Paragraph("Revision Priorities", heading_style))
                 for i, rec in enumerate(report.recommendations, 1):
-                    story.append(Paragraph(f"{i}. {rec}", body_style))
+                    if isinstance(rec, dict):
+                        topic_part = rec.get("topic", "General")
+                        priority = rec.get("priority", "MEDIUM")
+                        action = rec.get("action", rec.get("recommendation", ""))
+                        rec_text = f"<b>[{priority}] {topic_part}</b>: {action}"
+                    else:
+                        rec_text = str(rec)
+                    story.append(Paragraph(f"{i}. {rec_text}", body_style))
                 story.append(Spacer(1, 8))
 
             # Footer
             story.append(HRFlowable(width="100%", thickness=0.5, color=SAND, spaceAfter=6))
             story.append(Paragraph(
-                "Generated by ExamForge — AI-Powered Autonomous Examination System",
+                "Generated by ExamForge — AI-Powered Autonomous Examination System (Google Gemini + IBM Granite)",
                 muted_style,
             ))
 
@@ -388,6 +221,7 @@ class ReportService:
             "",
             f"Overall Score: {round((report.overall_score or 0) * 100, 1)}%",
             f"Assessment: {_score_label(report.overall_score or 0)}",
+            f"AI Provider: {(report.provider_mode or 'live').upper()} (IBM Granite + Google Gemini)",
             "",
         ]
         if report.strong_concepts:
@@ -401,7 +235,13 @@ class ReportService:
         if report.recommendations:
             lines.append("RECOMMENDATIONS:")
             for i, rec in enumerate(report.recommendations, 1):
-                lines.append(f"  {i}. {rec}")
+                if isinstance(rec, dict):
+                    topic_part = rec.get("topic", "General")
+                    priority = rec.get("priority", "MEDIUM")
+                    action = rec.get("action", rec.get("recommendation", ""))
+                    lines.append(f"  {i}. [{priority}] {topic_part}: {action}")
+                else:
+                    lines.append(f"  {i}. {rec}")
         return "\n".join(lines)
 
 

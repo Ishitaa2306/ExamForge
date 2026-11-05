@@ -23,7 +23,7 @@ class ExaminationReportResponse(BaseModel):
     weak_concepts: Optional[list[str]]
     partial_concepts: Optional[list[str]]
     not_assessed_concepts: Optional[list[str]]
-    recommendations: Optional[list[str]]
+    recommendations: Optional[list] = None
     provider_mode: Optional[str]
     generated_at: datetime
 

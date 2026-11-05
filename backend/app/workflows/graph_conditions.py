@@ -1,28 +1,22 @@
 """
-LangGraph conditional edge functions for the examination workflow.
+LangGraph Conditional Edge Functions for the ExamForge Examination Workflow.
+Enforces strict application-level examination rules and completion criteria.
 """
+from typing import Any
 
 
-def should_continue_or_complete(state: dict) -> str:
+def should_continue_or_complete(state: dict[str, Any]) -> str:
     """
-    Edge condition: decide whether to continue questioning or complete the exam.
-    Returns the name of the next node.
+    Evaluates whether the examination should transition to final completion or continue.
+    Returns: 'complete' | 'continue'
     """
     if state.get("is_complete"):
         return "complete"
 
-    asked = state.get("questions_asked_count", 0)
-    max_q = state.get("max_questions", 20)
-    if asked >= max_q:
+    asked_count = state.get("questions_asked_count", 0)
+    max_questions = state.get("max_questions", 20)
+
+    if asked_count >= max_questions:
         return "complete"
 
     return "continue"
-
-
-def has_answer_to_evaluate(state: dict) -> str:
-    """
-    Edge condition: skip evaluation if no answer was provided (first question turn).
-    """
-    if state.get("student_answer"):
-        return "evaluate"
-    return "skip_evaluate"

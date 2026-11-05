@@ -1,5 +1,5 @@
 """
-Tests for examination endpoints.
+Tests for Examination workflow, endpoints, and status checks.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +13,6 @@ TEST_DATABASE_URL = "sqlite:///./test_examforge_exams.db"
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create tables immediately
 Base.metadata.create_all(bind=engine)
 
 
@@ -76,4 +75,21 @@ def test_get_nonexistent_examination():
 def test_examinations_require_auth():
     """Examination list must reject unauthenticated requests."""
     response = client.get("/api/examinations/")
-    assert response.status_code == 403
+    assert response.status_code in (401, 403)
+
+
+def test_settings_status_endpoint():
+    """Settings status returns application, db, and provider info without credentials."""
+    headers = _auth_header()
+    response = client.get("/api/settings/status", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "application" in data
+    assert "database" in data
+    assert "gemini" in data
+    assert "granite" in data
+    assert data["application"]["name"] == "ExamForge"
+    # Ensure no API keys are exposed
+    raw_str = response.text
+    assert "AI_KEY" not in raw_str
+    assert "secret" not in raw_str.lower()

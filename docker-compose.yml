@@ -28,8 +28,9 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/examforge
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-change-in-production}
-      AI_PROVIDER_MODE: ${AI_PROVIDER_MODE:-mock}
+      AI_PROVIDER_MODE: ${AI_PROVIDER_MODE:-live}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL_ID: ${GEMINI_MODEL_ID:-gemini-3.5-flash}
       WATSONX_API_KEY: ${WATSONX_API_KEY:-}
       WATSONX_PROJECT_ID: ${WATSONX_PROJECT_ID:-}
       WATSONX_URL: ${WATSONX_URL:-https://us-south.ml.cloud.ibm.com}

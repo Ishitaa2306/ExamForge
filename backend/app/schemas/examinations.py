@@ -48,6 +48,7 @@ class NextQuestionResponse(BaseModel):
     topic_id: Optional[int] = None
     topic_name: Optional[str] = None
     order_index: int
+    is_follow_up: bool = False
     is_last: bool = False
     progress_pct: float = 0.0
 

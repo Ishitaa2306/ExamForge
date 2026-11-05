@@ -1,6 +1,8 @@
 """
-Prompts for answer evaluation.
+Prompts for Answer Evaluation Agent (IBM Granite via watsonx.ai).
+Evaluates student answers semantically against rubrics and academic context.
 """
+from typing import Any
 
 
 def build_evaluation_prompt(
@@ -8,41 +10,75 @@ def build_evaluation_prompt(
     expected_points: list[str],
     student_answer: str,
     context: str = "",
+    rubric: dict[str, Any] | None = None,
+    difficulty: str = "MEDIUM",
+    category: str = "CONCEPTUAL",
 ) -> str:
-    expected_str = "\n".join(f"- {p}" for p in expected_points) if expected_points else "Not specified"
-    context_section = f"\nReference context from document:\n\"\"\"\n{context[:3000]}\n\"\"\"" if context else ""
+    points_str = "\n".join(f"- {p}" for p in expected_points) if expected_points else "Infer from academic question & context."
+    rubric_str = str(rubric) if rubric else "Standard 5-criterion academic evaluation."
+    context_str = f"\nDOCUMENT GROUNDING CONTEXT:\n\"\"\"\n{context}\n\"\"\"\n" if context else ""
 
-    return f"""You are an expert academic examiner evaluating a student's answer.
+    return f"""You are IBM Granite, acting as a rigorous, fair Academic Answer Evaluation Specialist.
 
+Your task is to evaluate the student's submitted answer against the examination question, expected concepts, and grounded document context.
+
+EVALUATION CRITERIA & WEIGHTING:
+1. Correctness (30%): Factual and theoretical accuracy of statements made.
+2. Completeness (25%): Coverage of essential expected points and core dimensions.
+3. Conceptual Understanding (20%): Depth of comprehension vs superficial keyword dropping.
+4. Reasoning & Logic (15%): Logical coherence, cause-and-effect clarity, justifications.
+5. Application (10%): Ability to connect theory to scenarios, examples, or practical context.
+
+SEMANTIC EVALUATION RULES:
+- Recognize semantic equivalence: Alternative phrasing or student's own words expressing the correct concept must be awarded full credit.
+- Penalize keyword stuffing: Memorized terminology without sound reasoning or explanation must NOT receive full marks.
+- Pinpoint misconceptions: Identify exactly what misconceptions or gaps are evident in the student's reasoning.
+
+QUESTION DETAILS:
 Question: {question_text}
+Question Type: {category}
+Difficulty: {difficulty}
 
-Expected answer points:
-{expected_str}
-{context_section}
+EXPECTED CONCEPTS & RUBRIC:
+Expected Points:
+{points_str}
 
-Student's answer: {student_answer}
+Rubric Details:
+{rubric_str}
+{context_str}
+STUDENT SUBMISSION:
+\"\"\"
+{student_answer}
+\"\"\"
 
-Evaluate the student's answer strictly and fairly.
+CLASSIFICATION SYSTEM:
+- CORRECT: Demonstrates sound understanding, satisfies all core criteria (overall_score >= 0.85).
+- PARTIALLY_CORRECT: Contains valid elements but has omissions or minor flaws (0.50 <= overall_score < 0.85).
+- INCORRECT: Fundamentally flawed, erroneous reasoning, or major misconceptions (overall_score < 0.35).
+- INCOMPLETE: Answer begins correctly but omits indispensable components (0.35 <= overall_score < 0.50).
+- UNCLEAR: Incoherent, irrelevant, evasive, or unparseable.
 
-Evaluate the answer strictly and fairly. Return ONLY valid JSON:
+Return ONLY valid RFC-8259 JSON matching this exact structure:
 {{
-  "evaluation_label": "CORRECT|PARTIALLY_CORRECT|INCORRECT|INCOMPLETE|UNCLEAR",
-  "correctness_score": 0.0,
-  "completeness_score": 0.0,
-  "conceptual_score": 0.0,
-  "reasoning_score": 0.0,
-  "application_score": 0.0,
-  "overall_score": 0.0,
-  "missing_concepts": ["concept that was missed"],
-  "mistakes_identified": ["specific error"],
-  "evaluation_explanation": "Detailed feedback for the student",
-  "confidence": 0.9
+  "evaluation_label": "CORRECT",
+  "overall_score": 0.85,
+  "correctness_score": 0.90,
+  "completeness_score": 0.80,
+  "conceptual_score": 0.85,
+  "reasoning_score": 0.85,
+  "application_score": 0.80,
+  "correct_concepts": [
+    "Identified correct concept explanation"
+  ],
+  "missing_concepts": [
+    "Specific concept or detail omitted by student"
+  ],
+  "mistakes_identified": [
+    "Specific misconception or factual inaccuracy"
+  ],
+  "evaluation_explanation": "Detailed objective feedback explaining the scoring breakdown and suggestions.",
+  "confidence": 0.95,
+  "reasoning_quality": "High | Moderate | Low | None",
+  "evidence_sufficiency": "SUFFICIENT"
 }}
-
-Scoring guide (0.0 – 1.0):
-- CORRECT: overall_score >= 0.85
-- PARTIALLY_CORRECT: 0.5 <= overall_score < 0.85
-- INCORRECT: overall_score < 0.35
-- INCOMPLETE: answer attempts but omits critical points (0.35–0.5)
-- UNCLEAR: answer is incoherent or off-topic
 """

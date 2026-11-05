@@ -1,157 +1,141 @@
 """
-LangGraph examination workflow graph definition.
-
-The graph models the examination state machine:
-  START
-  → select_question   (Gemini selects next question from bank with topic coverage logic)
-  → [condition]       should_continue_or_complete
-      ↓ continue
-      → wait_for_answer   (state holds the question; caller submits answer via HTTP)
-      → evaluate_answer   (Granite evaluates the submitted answer)
-      → adjust_difficulty (adapt based on evaluation score)
-      → select_question   (loop)
-      ↓ complete
-      → complete_examination
-      → END
-
-Because the examination runs across multiple HTTP requests, the graph is compiled
-with a MemorySaver checkpointer so state is preserved between invocations.
+LangGraph Examination Workflow Engine.
+Coordinates the strict autonomous examination lifecycle across Google Gemini and IBM Granite.
 """
 import logging
-from functools import lru_cache
+from typing import Any
+
+from app.workflows.checkpoint_manager import CheckpointManager
+from app.workflows.graph_conditions import should_continue_or_complete
+from app.workflows.graph_nodes import (
+    assess_knowledge_node,
+    complete_examination_node,
+    evaluate_answer_node,
+    examiner_decision_node,
+    initial_question_node,
+    persist_answer_node,
+)
+from app.workflows.graph_state import ExaminationGraphState
 
 logger = logging.getLogger(__name__)
 
 
 class ExaminationGraph:
-    @staticmethod
-    @lru_cache(maxsize=1)
-    def get_graph():
-        """
-        Build and return the compiled LangGraph StateGraph.
-        Cached so the graph is only compiled once per process.
-        The graph uses a MemorySaver checkpointer for cross-request state persistence.
-        """
+    """
+    Compiles and executes the autonomous examination workflow graph.
+    PostgreSQL maintains durable persistence across execution steps.
+    """
+
+    _compiled_graph = None
+
+    @classmethod
+    def get_graph(cls):
+        """Build and compile the LangGraph StateGraph."""
+        if cls._compiled_graph is not None:
+            return cls._compiled_graph
+
         try:
             from langgraph.graph import StateGraph, END  # type: ignore
 
-            from app.workflows.graph_state import ExaminationGraphState
-            from app.workflows.graph_nodes import (
-                adjust_difficulty_node,
-                complete_examination_node,
-                evaluate_answer_node,
-                select_question_node,
-            )
-            from app.workflows.graph_conditions import should_continue_or_complete
-            from app.workflows.checkpoint_manager import CheckpointManager
-
             builder = StateGraph(ExaminationGraphState)
 
-            # ── Register nodes ──────────────────────────────────────────────
-            builder.add_node("select_question", select_question_node)
+            # Register Nodes
+            builder.add_node("initial_question", initial_question_node)
+            builder.add_node("persist_answer", persist_answer_node)
             builder.add_node("evaluate_answer", evaluate_answer_node)
-            builder.add_node("adjust_difficulty", adjust_difficulty_node)
+            builder.add_node("assess_knowledge", assess_knowledge_node)
+            builder.add_node("examiner_decision", examiner_decision_node)
             builder.add_node("complete_examination", complete_examination_node)
 
-            # ── Entry point ─────────────────────────────────────────────────
-            builder.set_entry_point("select_question")
+            # Edges
+            builder.set_entry_point("initial_question")
+            builder.add_edge("initial_question", END)  # Pause to wait for student answer
 
-            # ── After select_question: check whether to continue or complete ─
+            # Submission turn flow
+            builder.add_edge("persist_answer", "evaluate_answer")
+            builder.add_edge("evaluate_answer", "assess_knowledge")
+
             builder.add_conditional_edges(
-                "select_question",
+                "assess_knowledge",
                 should_continue_or_complete,
                 {
-                    "continue": END,          # Pause and wait for answer via HTTP
+                    "continue": "examiner_decision",
                     "complete": "complete_examination",
                 },
             )
 
-            # ── Answer submitted: evaluate → adjust → select next ───────────
-            builder.add_edge("evaluate_answer", "adjust_difficulty")
-            builder.add_edge("adjust_difficulty", "select_question")
-
-            # ── Complete → END ───────────────────────────────────────────────
+            builder.add_edge("examiner_decision", END)  # Pause with new question for student
             builder.add_edge("complete_examination", END)
 
             checkpointer = CheckpointManager.get_checkpointer()
             if checkpointer:
-                graph = builder.compile(checkpointer=checkpointer)
-                logger.info("LangGraph examination graph compiled with MemorySaver checkpointer.")
+                cls._compiled_graph = builder.compile(checkpointer=checkpointer)
             else:
-                graph = builder.compile()
-                logger.warning("LangGraph examination graph compiled WITHOUT checkpointer (stateless).")
+                cls._compiled_graph = builder.compile()
 
-            return graph
+            logger.info("LangGraph examination workflow graph successfully compiled.")
+            return cls._compiled_graph
 
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to compile LangGraph examination graph: %s", exc)
+        except Exception as exc:
+            logger.warning("LangGraph graph compilation deferred: %s", exc)
+            return None
 
-            # Fallback: no-op callable so the app still runs if LangGraph is unavailable
-            class _NoopGraph:
-                def invoke(self, state: dict, **kwargs) -> dict:
-                    logger.warning("Using no-op LangGraph fallback.")
-                    return {**state, "is_complete": True}
-
-            return _NoopGraph()
-
-    @staticmethod
-    def invoke_select_question(
-        examination_id: int,
-        document_id: int,
-        thread_id: str,
-        current_difficulty: str = "MEDIUM",
-        questions_asked_count: int = 0,
-        max_questions: int = 20,
-    ) -> dict:
+    @classmethod
+    def execute_start(cls, examination_id: int) -> dict[str, Any]:
         """
-        Invoke the graph to select the next question.
-        Returns the updated state (includes current_question_text etc.).
+        Executes the initial question generation turn for an examination.
+        Reconciles with PostgreSQL to support seamless resumption.
         """
-        from app.workflows.checkpoint_manager import CheckpointManager
+        state = CheckpointManager.load_authoritative_state(examination_id)
 
-        graph = ExaminationGraph.get_graph()
-        initial_state = {
-            "examination_id": examination_id,
-            "document_id": document_id,
-            "current_difficulty": current_difficulty,
-            "questions_asked_count": questions_asked_count,
-            "max_questions": max_questions,
-            "is_complete": False,
-            "student_answer": None,
-        }
-        config = CheckpointManager.get_thread_config(thread_id)
-        result = graph.invoke(initial_state, config=config)
-        return result
+        # If already in progress and last question is unanswered, return it directly
+        if state.get("question_asked_id") and not state.get("student_answer_id"):
+            logger.info("Resuming examination %d on unanswered question %s", examination_id, state["question_asked_id"])
+            return state
 
-    @staticmethod
-    def invoke_evaluate_answer(
+        # If questions haven't been asked yet
+        if state.get("questions_asked_count", 0) == 0:
+            result_state = initial_question_node(state)
+            return result_state
+
+        return state
+
+    @classmethod
+    def execute_submission(
+        cls,
         examination_id: int,
-        document_id: int,
-        thread_id: str,
+        question_asked_id: int,
         student_answer: str,
-        current_question_text: str,
-        current_difficulty: str = "MEDIUM",
-        questions_asked_count: int = 0,
-        max_questions: int = 20,
-    ) -> dict:
+        time_taken_seconds: int = 0,
+    ) -> dict[str, Any]:
         """
-        Invoke the graph starting from the evaluate_answer node.
-        Used after the student submits an answer.
+        Executes the mandatory strict sequential examination loop:
+        1. Persist student answer
+        2. IBM Granite answer evaluation
+        3. IBM Granite knowledge assessment
+        4. Check completion rules
+        5. Google Gemini autonomous examiner decision (follow-up vs new question)
         """
-        from app.workflows.checkpoint_manager import CheckpointManager
+        state = CheckpointManager.load_authoritative_state(examination_id)
+        state["question_asked_id"] = question_asked_id
+        state["student_answer"] = student_answer
+        state["time_taken_seconds"] = time_taken_seconds
 
-        graph = ExaminationGraph.get_graph()
-        state = {
-            "examination_id": examination_id,
-            "document_id": document_id,
-            "student_answer": student_answer,
-            "current_question_text": current_question_text,
-            "current_difficulty": current_difficulty,
-            "questions_asked_count": questions_asked_count,
-            "max_questions": max_questions,
-            "is_complete": False,
-        }
-        config = CheckpointManager.get_thread_config(thread_id)
-        # Resume from evaluate_answer node
-        result = graph.invoke(state, config=config)
-        return result
+        # 1. Persist Answer
+        state = persist_answer_node(state)
+
+        # 2. Granite Answer Evaluation
+        state = evaluate_answer_node(state)
+
+        # 3. Granite Knowledge Assessment
+        state = assess_knowledge_node(state)
+
+        # 4. Check completion
+        condition = should_continue_or_complete(state)
+        if condition == "complete":
+            state = complete_examination_node(state)
+            return state
+
+        # 5. Gemini Examiner Next Action Decision
+        state = examiner_decision_node(state)
+        return state

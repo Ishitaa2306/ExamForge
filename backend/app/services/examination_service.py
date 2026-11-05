@@ -1,9 +1,11 @@
 """
-Examination service — creates exams, orchestrates question selection and answer flow.
+Examination Service — orchestrates the examination lifecycle, question selection,
+and answer submission using the LangGraph examination engine.
 """
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -13,10 +15,8 @@ from app.database.models import (
     Examination,
     ExaminationStatus,
     QuestionAsked,
-    QuestionBank,
     StudentAnswer,
     TopicAssessment,
-    TopicAssessmentStatus,
 )
 from app.schemas.examinations import (
     ExaminationProgressResponse,
@@ -24,11 +24,9 @@ from app.schemas.examinations import (
     SubmitAnswerRequest,
     TopicProgressItem,
 )
+from app.workflows.examination_graph import ExaminationGraph
 
 logger = logging.getLogger(__name__)
-
-# Minimum questions answered before considering raising/lowering difficulty
-DIFFICULTY_ADAPT_AFTER = 3
 
 
 class ExaminationService:
@@ -39,7 +37,7 @@ class ExaminationService:
         document_id: int,
         max_questions: int = 20,
     ) -> Examination:
-        """Instantiate a new Examination row."""
+        """Create a new Examination session row with unique thread ID."""
         thread_id = str(uuid.uuid4())
         exam = Examination(
             user_id=user_id,
@@ -54,140 +52,40 @@ class ExaminationService:
         return exam
 
     @staticmethod
-    def get_next_question(
+    def start_or_resume_examination(
         db: Session,
         examination: Examination,
     ) -> NextQuestionResponse:
-        """Select the next question and record it in questions_asked."""
-        if examination.status == ExaminationStatus.CREATED:
-            examination.status = ExaminationStatus.IN_PROGRESS
-            examination.started_at = datetime.now(timezone.utc)
-            db.commit()
-
-        # Determine which questions have already been asked
-        asked_ids = [
-            qa.question_id
-            for qa in db.query(QuestionAsked)
-            .filter(QuestionAsked.examination_id == examination.id)
-            .all()
-            if qa.question_id is not None
-        ]
-
-        # Topics already covered and their question counts
-        topic_question_counts: dict[int, int] = {}
-        for qa in db.query(QuestionAsked).filter(
-            QuestionAsked.examination_id == examination.id
-        ).all():
-            if qa.topic_id:
-                topic_question_counts[qa.topic_id] = topic_question_counts.get(qa.topic_id, 0) + 1
-
-        # Find a topic with fewer questions asked (for coverage balance)
-        # Get all topics for this document
-        all_topics = db.query(DocumentTopic).filter(
-            DocumentTopic.document_id == examination.document_id
-        ).all()
-        topic_ids = [t.id for t in all_topics]
-
-        # Prefer topics with fewer questions
-        least_examined_topic_id = None
-        min_count = float("inf")
-        for tid in topic_ids:
-            count = topic_question_counts.get(tid, 0)
-            if count < min_count:
-                min_count = count
-                least_examined_topic_id = tid
-
-        # Select question: prefer least-examined topic + current difficulty
-        question: QuestionBank | None = None
-
-        if least_examined_topic_id and asked_ids:
-            question = (
-                db.query(QuestionBank)
-                .filter(
-                    QuestionBank.document_id == examination.document_id,
-                    QuestionBank.difficulty == examination.current_difficulty,
-                    QuestionBank.topic_id == least_examined_topic_id,
-                    QuestionBank.id.notin_(asked_ids),
-                )
-                .first()
-            )
-
-        # Fallback: any question matching current difficulty not yet asked
-        if not question:
-            filter_args = [
-                QuestionBank.document_id == examination.document_id,
-                QuestionBank.difficulty == examination.current_difficulty,
-            ]
-            if asked_ids:
-                filter_args.append(QuestionBank.id.notin_(asked_ids))
-            question = db.query(QuestionBank).filter(*filter_args).first()
-
-        # Final fallback: any unused question regardless of difficulty
-        if not question:
-            filter_args = [QuestionBank.document_id == examination.document_id]
-            if asked_ids:
-                filter_args.append(QuestionBank.id.notin_(asked_ids))
-            question = db.query(QuestionBank).filter(*filter_args).first()
-
-        progress_pct = round(
-            (examination.questions_asked_count / examination.max_questions) * 100
-            if examination.max_questions > 0
-            else 0.0,
-            1,
-        )
+        """
+        Starts an examination or resumes an in-progress session.
+        Returns the active question without duplicates.
+        """
+        result_state = ExaminationGraph.execute_start(examination.id)
+        db.refresh(examination)
 
         is_last = (
-            examination.questions_asked_count + 1 >= examination.max_questions
-            or question is None
+            examination.questions_asked_count >= examination.max_questions
+            or result_state.get("is_complete", False)
         )
 
-        if question is None:
-            # No more questions — complete
-            ExaminationService._complete_examination(db, examination)
-            return NextQuestionResponse(
-                examination_id=examination.id,
-                question_asked_id=-1,
-                question_text="No more questions available.",
-                category="CONCEPTUAL",
-                difficulty=examination.current_difficulty,
-                topic_id=None,
-                topic_name=None,
-                order_index=examination.questions_asked_count,
-                is_last=True,
-                progress_pct=100.0,
-            )
-
-        order_index = examination.questions_asked_count + 1
-        qa = QuestionAsked(
-            examination_id=examination.id,
-            question_id=question.id,
-            question_text=question.question_text,
-            category=question.category,
-            difficulty=question.difficulty,
-            topic_id=question.topic_id,
-            order_index=order_index,
-        )
-        db.add(qa)
-
-        examination.questions_asked_count = order_index
-        examination.current_topic_id = question.topic_id
-        db.commit()
-        db.refresh(qa)
-
-        topic_name: str | None = None
-        if qa.topic_id:
-            topic = db.query(DocumentTopic).filter(DocumentTopic.id == qa.topic_id).first()
-            topic_name = topic.name if topic else None
+        qa_id = result_state.get("question_asked_id", -1)
+        q_text = result_state.get("current_question_text", "No question available.")
+        category = result_state.get("current_category", "CONCEPTUAL")
+        diff = result_state.get("current_difficulty", "MEDIUM")
+        topic_id = result_state.get("current_topic_id")
+        topic_name = result_state.get("current_topic_name")
+        progress_pct = result_state.get("progress_pct", 0.0)
 
         return NextQuestionResponse(
             examination_id=examination.id,
-            question_asked_id=qa.id,
-            question_text=qa.question_text,
-            category=qa.category.value,
-            difficulty=qa.difficulty,
-            topic_id=qa.topic_id,
+            question_asked_id=qa_id,
+            question_text=q_text,
+            category=category,
+            difficulty=diff,
+            topic_id=topic_id,
             topic_name=topic_name,
-            order_index=qa.order_index,
+            order_index=examination.questions_asked_count,
+            is_follow_up=result_state.get("is_follow_up", False),
             is_last=is_last,
             progress_pct=progress_pct,
         )
@@ -198,35 +96,38 @@ class ExaminationService:
         examination: Examination,
         payload: SubmitAnswerRequest,
     ) -> NextQuestionResponse:
-        """Save the student's answer, trigger async evaluation, then return the next question."""
-        answer = StudentAnswer(
+        """
+        Executes the mandatory strict sequential examination workflow:
+        1. Persist answer
+        2. Real IBM Granite Answer Evaluation
+        3. Real IBM Granite Knowledge Assessment
+        4. Real Google Gemini Examiner Decision (Follow-up vs New Question)
+        5. Validate and return next question or completion signal.
+        """
+        # Guard against duplicate answer submissions on the same question
+        existing_answer = (
+            db.query(StudentAnswer)
+            .filter(StudentAnswer.question_asked_id == payload.question_asked_id)
+            .first()
+        )
+        if existing_answer:
+            logger.info("Answer already submitted for question_asked_id %d", payload.question_asked_id)
+
+        result_state = ExaminationGraph.execute_submission(
             examination_id=examination.id,
             question_asked_id=payload.question_asked_id,
-            answer_text=payload.answer_text,
-            time_taken_seconds=payload.time_taken_seconds,
+            student_answer=payload.answer_text,
+            time_taken_seconds=payload.time_taken_seconds or 0,
         )
-        db.add(answer)
-        db.commit()
-        db.refresh(answer)
+        db.refresh(examination)
 
-        # Fire-and-forget evaluation in background
-        try:
-            from app.agents.answer_evaluation import AnswerEvaluationAgent
-            AnswerEvaluationAgent.evaluate_async(student_answer_id=answer.id)
-        except Exception as exc:
-            logger.warning("Answer evaluation agent failed to start: %s", exc)
-
-        # Adapt difficulty based on recent performance
-        ExaminationService._adapt_difficulty(db, examination)
-
-        if examination.questions_asked_count >= examination.max_questions:
-            ExaminationService._complete_examination(db, examination)
+        if result_state.get("is_complete") or examination.status == ExaminationStatus.COMPLETED:
             return NextQuestionResponse(
                 examination_id=examination.id,
                 question_asked_id=-1,
-                question_text="Examination complete.",
+                question_text="Examination completed. Your academic performance report has been generated.",
                 category="CONCEPTUAL",
-                difficulty=examination.current_difficulty,
+                difficulty=examination.current_difficulty.value if hasattr(examination.current_difficulty, "value") else str(examination.current_difficulty),
                 topic_id=None,
                 topic_name=None,
                 order_index=examination.questions_asked_count,
@@ -234,30 +135,46 @@ class ExaminationService:
                 progress_pct=100.0,
             )
 
-        next_q = ExaminationService.get_next_question(db, examination)
-        # If the next question itself signals last, check if we've hit the limit
-        if next_q.is_last and next_q.question_asked_id == -1:
-            # Already completed via get_next_question
-            pass
-        return next_q
+        qa_id = result_state.get("question_asked_id", -1)
+        q_text = result_state.get("current_question_text", "Next question.")
+        category = result_state.get("current_category", "CONCEPTUAL")
+        diff = result_state.get("current_difficulty", "MEDIUM")
+        topic_id = result_state.get("current_topic_id")
+        topic_name = result_state.get("current_topic_name")
+        progress_pct = result_state.get("progress_pct", 0.0)
+        is_last = examination.questions_asked_count >= examination.max_questions
+
+        return NextQuestionResponse(
+            examination_id=examination.id,
+            question_asked_id=qa_id,
+            question_text=q_text,
+            category=category,
+            difficulty=diff,
+            topic_id=topic_id,
+            topic_name=topic_name,
+            order_index=examination.questions_asked_count,
+            is_follow_up=result_state.get("is_follow_up", False),
+            is_last=is_last,
+            progress_pct=progress_pct,
+        )
 
     @staticmethod
     def get_progress(
         db: Session,
         examination: Examination,
     ) -> ExaminationProgressResponse:
-        """Return structured progress info for an examination."""
-        from app.database.models import TopicAssessment
-
+        """Returns structured progress, topic assessments, and mastery metrics."""
         assessments = (
             db.query(TopicAssessment)
             .filter(TopicAssessment.examination_id == examination.id)
             .all()
         )
 
-        all_topics = db.query(DocumentTopic).filter(
-            DocumentTopic.document_id == examination.document_id
-        ).all()
+        all_topics = (
+            db.query(DocumentTopic)
+            .filter(DocumentTopic.document_id == examination.document_id)
+            .all()
+        )
         topic_name_map = {t.id: t.name for t in all_topics}
 
         topics_covered = [
@@ -273,7 +190,8 @@ class ExaminationService:
 
         progress_pct = round(
             (examination.questions_asked_count / examination.max_questions) * 100
-            if examination.max_questions > 0 else 0.0,
+            if examination.max_questions > 0
+            else 0.0,
             1,
         )
 
@@ -289,89 +207,12 @@ class ExaminationService:
         )
 
     @staticmethod
-    def _adapt_difficulty(db: Session, examination: Examination) -> None:
-        """
-        Adjust examination difficulty based on recent answer evaluations.
-        """
-        from app.database.models import AnswerEvaluation, EvaluationLabel
+    def manual_complete(db: Session, examination: Examination) -> None:
+        """Manually trigger examination finalization and report generation."""
+        from app.agents.report_generation import ReportGenerationAgent
 
-        # Only adapt after enough data
-        if examination.questions_asked_count < DIFFICULTY_ADAPT_AFTER:
-            return
-
-        # Get last 3 evaluations
-        recent_evals = (
-            db.query(AnswerEvaluation)
-            .filter(AnswerEvaluation.examination_id == examination.id)
-            .order_by(AnswerEvaluation.created_at.desc())
-            .limit(3)
-            .all()
-        )
-
-        if len(recent_evals) < 2:
-            return
-
-        correct_count = sum(
-            1 for e in recent_evals
-            if e.evaluation_label == EvaluationLabel.CORRECT
-        )
-        incorrect_count = sum(
-            1 for e in recent_evals
-            if e.evaluation_label in (EvaluationLabel.INCORRECT, EvaluationLabel.INCOMPLETE)
-        )
-
-        current = examination.current_difficulty
-        if correct_count >= 3 and current != DifficultyLevel.HARD:
-            # All correct — increase difficulty
-            if current == DifficultyLevel.EASY:
-                examination.current_difficulty = DifficultyLevel.MEDIUM
-            elif current == DifficultyLevel.MEDIUM:
-                examination.current_difficulty = DifficultyLevel.HARD
-            db.commit()
-        elif incorrect_count >= 2 and current != DifficultyLevel.EASY:
-            # Mostly wrong — decrease difficulty
-            if current == DifficultyLevel.HARD:
-                examination.current_difficulty = DifficultyLevel.MEDIUM
-            elif current == DifficultyLevel.MEDIUM:
-                examination.current_difficulty = DifficultyLevel.EASY
-            db.commit()
-
-    @staticmethod
-    def _complete_examination(db: Session, examination: Examination) -> None:
-        """Mark examination as complete and trigger report generation."""
         examination.status = ExaminationStatus.COMPLETED
         examination.completed_at = datetime.now(timezone.utc)
         db.commit()
 
-        # Trigger knowledge assessment + report generation asynchronously
-        import threading
-        t = threading.Thread(
-            target=ExaminationService._finalize_examination,
-            args=(examination.id,),
-            daemon=True,
-        )
-        t.start()
-
-    @staticmethod
-    def _finalize_examination(examination_id: int) -> None:
-        """Run knowledge assessment and generate report after examination ends."""
-        from app.database.connection import SessionLocal
-        db = SessionLocal()
-        try:
-            exam = db.query(Examination).filter(Examination.id == examination_id).first()
-            if not exam:
-                return
-
-            # Run knowledge assessment
-            from app.agents.knowledge_assessment import KnowledgeAssessmentAgent
-            KnowledgeAssessmentAgent.assess(db=db, examination=exam)
-
-            # Generate report
-            from app.services.report_service import ReportService
-            ReportService.generate_report(db=db, examination=exam)
-
-            logger.info("Finalized examination %d", examination_id)
-        except Exception as exc:
-            logger.exception("Examination finalization failed for %d: %s", examination_id, exc)
-        finally:
-            db.close()
+        ReportGenerationAgent.generate(db=db, examination=examination)

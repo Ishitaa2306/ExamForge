@@ -50,4 +50,4 @@ if os.path.isdir(settings.UPLOAD_DIR):
 @app.get("/health", tags=["health"])
 def health_check():
     """Simple health-check endpoint."""
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "1.0.0", "gemini_model": settings.GEMINI_MODEL_ID}
