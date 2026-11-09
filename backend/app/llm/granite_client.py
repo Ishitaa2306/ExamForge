@@ -21,7 +21,7 @@ class GraniteClient(BaseLLMClient):
         self,
         api_key: str,
         project_id: str,
-        model_id: str = "ibm/granite-13b-instruct-v2",
+        model_id: str = "ibm/granite-4-h-small",
         url: str = "https://us-south.ml.cloud.ibm.com",
     ):
         if not api_key or not api_key.strip():
@@ -34,7 +34,7 @@ class GraniteClient(BaseLLMClient):
             )
         self._api_key = api_key.strip()
         self._project_id = project_id.strip()
-        self._model_id = model_id.strip() if model_id else "ibm/granite-13b-instruct-v2"
+        self._model_id = model_id.strip() if model_id else "ibm/granite-4-h-small"
         self._base_url = (url.strip() if url else "https://us-south.ml.cloud.ibm.com").rstrip("/")
         self._iam_token: str | None = None
 
@@ -79,12 +79,14 @@ class GraniteClient(BaseLLMClient):
             "input": prompt,
             "parameters": {
                 "decoding_method": "greedy",
-                "max_new_tokens": kwargs.get("max_new_tokens", 2048),
+                "max_new_tokens": kwargs.get("max_new_tokens", 768),
                 "min_new_tokens": kwargs.get("min_new_tokens", 1),
                 "stop_sequences": kwargs.get("stop_sequences", []),
                 "repetition_penalty": kwargs.get("repetition_penalty", 1.05),
             },
         }
+
+        request_timeout = httpx.Timeout(180.0, connect=30.0, read=180.0)
 
         try:
             response = httpx.post(
@@ -95,7 +97,7 @@ class GraniteClient(BaseLLMClient):
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                timeout=60.0,
+                timeout=request_timeout,
             )
 
             # Retry once on token expiration (401)
@@ -109,7 +111,7 @@ class GraniteClient(BaseLLMClient):
                         "Content-Type": "application/json",
                         "Accept": "application/json",
                     },
-                    timeout=60.0,
+                    timeout=request_timeout,
                 )
 
             response.raise_for_status()
@@ -131,12 +133,23 @@ class GraniteClient(BaseLLMClient):
             raise GraniteProviderError(f"Granite API inference failed: {exc}") from exc
 
     def generate_json(self, prompt: str, **kwargs: Any) -> dict:
-        json_instruction_prompt = (
-            prompt
-            + "\n\nCRITICAL: Output ONLY valid, raw JSON. Do not include introductory text, markdown backticks, or concluding remarks."
-        )
-        raw = self.generate(json_instruction_prompt, **kwargs)
+        if "<|system|>" not in prompt and "<|user|>" not in prompt:
+            formatted_prompt = (
+                f"<|system|>\nYou are an AI assistant powered by IBM Granite. "
+                f"Your task is to analyze the input and output ONLY a valid RFC-8259 JSON object. "
+                f"Do not include markdown fences, comments, introductory text, or explanations outside the JSON.\n"
+                f"<|user|>\n{prompt}\n<|assistant|>\n{{"
+            )
+            prefilled = True
+        else:
+            formatted_prompt = prompt
+            prefilled = False
+
+        raw = self.generate(formatted_prompt, **kwargs)
         text = raw.strip()
+
+        if prefilled and not text.startswith("{"):
+            text = "{" + text
 
         # Remove markdown fences if present
         if text.startswith("```"):
@@ -147,15 +160,47 @@ class GraniteClient(BaseLLMClient):
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
 
+        # Clean single-line and multi-line comments and trailing commas
+        cleaned_text = re.sub(r'//[^\r\n]*', '', text)
+        cleaned_text = re.sub(r'/\*.*?\*/', '', cleaned_text, flags=re.DOTALL)
+        cleaned_text = re.sub(r',\s*([}\]])', r'\1', cleaned_text).strip()
+
+        def _unwrap(obj: Any) -> Any:
+            if isinstance(obj, list) and len(obj) == 1 and isinstance(obj[0], dict):
+                return obj[0]
+            return obj
+
         try:
-            return json.loads(text)
+            return _unwrap(json.loads(cleaned_text))
         except json.JSONDecodeError:
-            match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
+            # 1. Try finding outermost { ... }
+            first_brace = cleaned_text.find("{")
+            last_brace = cleaned_text.rfind("}")
+            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                sub = cleaned_text[first_brace : last_brace + 1]
+                try:
+                    return _unwrap(json.loads(sub))
+                except Exception:
+                    pass
+
+            # 2. Try raw_decode from every '{' or '[' index in cleaned_text
+            bracket_indices = [i for i, c in enumerate(cleaned_text) if c in ("{", "[")]
+            for idx in reversed(bracket_indices):
+                try:
+                    obj, _ = json.JSONDecoder().raw_decode(cleaned_text[idx:])
+                    if isinstance(obj, (dict, list)):
+                        return _unwrap(obj)
+                except Exception:
+                    continue
+
+            # 3. Try regex extraction
+            match = re.search(r"(\{.*\}|\[.*\])", cleaned_text, re.DOTALL)
             if match:
                 try:
-                    return json.loads(match.group())
+                    return _unwrap(json.loads(match.group()))
                 except json.JSONDecodeError:
                     pass
+
             logger.error("Failed to parse Granite JSON response: %s", raw[:300])
             raise GraniteProviderError(
                 "Granite returned an invalid JSON response structure.",

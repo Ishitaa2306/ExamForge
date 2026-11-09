@@ -34,7 +34,7 @@ services:
       WATSONX_API_KEY: ${WATSONX_API_KEY:-}
       WATSONX_PROJECT_ID: ${WATSONX_PROJECT_ID:-}
       WATSONX_URL: ${WATSONX_URL:-https://us-south.ml.cloud.ibm.com}
-      GRANITE_MODEL_ID: ${GRANITE_MODEL_ID:-ibm/granite-13b-instruct-v2}
+      GRANITE_MODEL_ID: ${GRANITE_MODEL_ID:-ibm/granite-4-h-small}
       UPLOAD_DIR: /app/storage/uploads
       CHROMA_DIR: /app/storage/chroma
     volumes:

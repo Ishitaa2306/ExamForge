@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore.js'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000,
+  timeout: 120000,
 })
 
 // Attach Bearer token to every request

@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ExamForge API",
-    description="Autonomous AI examination platform",
+    description="Autonomous AI examination platform — Gemini & IBM Granite Powered",
     version="1.0.0",
     lifespan=lifespan,
 )

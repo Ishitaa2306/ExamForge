@@ -66,7 +66,11 @@ class AnswerEvaluationAgent:
             category=qa.category.value if hasattr(qa.category, "value") else str(qa.category),
         )
 
-        result = client.generate_json(prompt)
+        result = client.generate_json(prompt, max_new_tokens=768)
+        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
+            result = result[0]
+        elif not isinstance(result, dict):
+            result = {}
 
         # Parse and sanitize scores
         overall_score = float(result.get("overall_score", 0.0))

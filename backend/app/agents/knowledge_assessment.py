@@ -103,7 +103,11 @@ class KnowledgeAssessmentAgent:
                 previous_assessment=prev_dict,
             )
             try:
-                assessment_res = client.generate_json(prompt)
+                assessment_res = client.generate_json(prompt, max_new_tokens=512)
+                if isinstance(assessment_res, list) and len(assessment_res) > 0 and isinstance(assessment_res[0], dict):
+                    assessment_res = assessment_res[0]
+                elif not isinstance(assessment_res, dict):
+                    assessment_res = {}
                 status_raw = assessment_res.get("status", "PARTIALLY_UNDERSTOOD")
                 status = _safe_assessment_status(status_raw)
                 strength_score = float(assessment_res.get("strength_score", 0.5))

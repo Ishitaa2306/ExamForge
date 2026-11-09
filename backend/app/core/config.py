@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     WATSONX_API_KEY: str = ""
     WATSONX_PROJECT_ID: str = ""
     WATSONX_URL: str = "https://us-south.ml.cloud.ibm.com"
-    GRANITE_MODEL_ID: str = "ibm/granite-13b-instruct-v2"
+    GRANITE_MODEL_ID: str = "ibm/granite-4-h-small"
 
     # File Upload & Vector Storage
     MAX_FILE_SIZE_MB: int = 50

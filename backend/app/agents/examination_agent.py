@@ -132,6 +132,10 @@ class AutonomousExaminerAgent:
         )
 
         decision = client.generate_json(prompt)
+        if isinstance(decision, list) and len(decision) > 0 and isinstance(decision[0], dict):
+            decision = decision[0]
+        elif not isinstance(decision, dict):
+            decision = {}
 
         action = str(decision.get("decision_action", "NEW_QUESTION")).upper()
         q_text = decision.get("question_text", "").strip()

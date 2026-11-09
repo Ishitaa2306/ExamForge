@@ -61,8 +61,8 @@ export default function SettingsPage() {
     { name: 'Question Generation Agent', provider: 'Google Gemini', model: status?.gemini?.model_id || 'Configured in .env', role: '8-category question authoring with rubrics' },
     { name: 'Autonomous Examination Agent', provider: 'Google Gemini', model: status?.gemini?.model_id || 'Configured in .env', role: 'Adaptive examiner, follow-ups, difficulty tuning' },
     { name: 'Final Report Generation Agent', provider: 'Google Gemini', model: status?.gemini?.model_id || 'Configured in .env', role: 'Academic performance report synthesis' },
-    { name: 'Answer Evaluation Agent', provider: 'IBM Granite (watsonx.ai)', model: status?.granite?.model_id || 'ibm/granite-13b-instruct-v2', role: '5-criterion semantic answer scoring' },
-    { name: 'Knowledge Assessment Agent', provider: 'IBM Granite (watsonx.ai)', model: status?.granite?.model_id || 'ibm/granite-13b-instruct-v2', role: 'Topic mastery profiling & gap detection' },
+    { name: 'Answer Evaluation Agent', provider: 'IBM Granite (watsonx.ai)', model: status?.granite?.model_id || 'Configured in .env', role: '5-criterion semantic answer scoring' },
+    { name: 'Knowledge Assessment Agent', provider: 'IBM Granite (watsonx.ai)', model: status?.granite?.model_id || 'Configured in .env', role: 'Topic mastery profiling & gap detection' },
   ]
 
   return (
@@ -194,7 +194,7 @@ export default function SettingsPage() {
               )}
             </div>
             <p className="text-xs text-warmgray">
-              Active Model: <strong className="text-charcoal font-mono">{status?.granite?.model_id || 'ibm/granite-13b-instruct-v2'}</strong>
+              Active Model: <strong className="text-charcoal font-mono">{status?.granite?.model_id || 'Configured in .env'}</strong>
             </p>
             {testResults?.granite && (
               <div className="mt-2 pt-2 border-t border-sand text-xs">
